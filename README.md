@@ -127,7 +127,7 @@ Support development using cryptocurrencies:
 ## 📞 Contact
 
 If you have questions or suggestions:
-- **Telegram**: [Join our channel](---)
+- **Telegram**: [Join our channel](https://t.me/+vpXdTJ_S3mo0ZjIy)
 
 ---
 

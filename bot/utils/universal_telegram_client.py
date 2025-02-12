@@ -45,8 +45,8 @@ class UniversalTelegramClient:
     def _init_client(self):
         try:
             self.client = TelegramClient(connection=ConnectionTcpAbridged, **self._client_params)
-            self.client.parse_mode = None  # Отключаем парсинг сообщений
-            self.client.no_updates = True  # Отключаем обновления
+            self.client.parse_mode = None
+            self.client.no_updates = True
             self.is_pyrogram = False
             self.session_name, _ = os.path.splitext(os.path.basename(self.client.session.filename))
         except OperationalError:
@@ -55,7 +55,6 @@ class UniversalTelegramClient:
             self._client_params['name'] = session_name
             self.client = PyrogramClient(**self._client_params)
             
-            # Отключаем обработку обновлений для Pyrogram клиента
             self.client.no_updates = True
             self.client.run = lambda *args, **kwargs: None
             
@@ -489,7 +488,6 @@ class UniversalTelegramClient:
         return False
 
     async def _telethon_mute_and_archive_channel(self, channel_id: int) -> None:
-        """Отключение уведомлений и архивация канала для Telethon."""
         try:
             await self.client(account.UpdateNotifySettingsRequest(
                 peer=InputNotifyPeer(
@@ -515,7 +513,6 @@ class UniversalTelegramClient:
             logger.warning(f"{self.session_name} | Error while configuring channel: {str(e)}")
 
     async def _pyrogram_mute_and_archive_channel(self, channel_id: int) -> None:
-        """Отключение уведомлений и архивация канала для Pyrogram."""
         try:
             peer = await self.client.resolve_peer(channel_id)
             
