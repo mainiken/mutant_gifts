@@ -7,6 +7,8 @@ import signal
 from copy import deepcopy
 from random import uniform
 from colorama import init, Fore, Style
+import shutil
+from typing import Optional
 
 from bot.utils.universal_telegram_client import UniversalTelegramClient
 from bot.utils.web import run_web_and_tunnel, stop_web_and_tunnel
@@ -16,6 +18,18 @@ from bot.utils import logger, config_utils, proxy_utils, CONFIG_PATH, SESSIONS_P
 from bot.core.tapper import run_tapper
 from bot.core.registrator import register_sessions
 from bot.utils.updater import UpdateManager
+from bot.exceptions import InvalidSession
+
+from telethon.errors import (
+    AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError,
+    SessionPasswordNeededError
+)
+
+from pyrogram.errors import (
+    AuthKeyUnregistered as PyrogramAuthKeyUnregisteredError,
+    SessionPasswordNeeded as PyrogramSessionPasswordNeededError,
+    SessionRevoked as PyrogramSessionRevoked
+)
 
 init()
 shutdown_event = asyncio.Event()
@@ -98,6 +112,39 @@ async def process() -> None:
             await stop_web_and_tunnel()
             print("Program terminated.")
 
+async def move_invalid_session_to_error_folder(session_name: str) -> None:
+    error_dir = os.path.join(SESSIONS_PATH, "error")
+    os.makedirs(error_dir, exist_ok=True)
+    
+    session_patterns = [
+        f"{SESSIONS_PATH}/{session_name}.session",
+        f"{SESSIONS_PATH}/telethon/{session_name}.session",
+        f"{SESSIONS_PATH}/pyrogram/{session_name}.session"
+    ]
+    
+    found = False
+    for pattern in session_patterns:
+        matching_files = glob.glob(pattern)
+        for session_file in matching_files:
+            found = True
+            if os.path.exists(session_file):
+                relative_path = os.path.relpath(os.path.dirname(session_file), SESSIONS_PATH)
+                if relative_path == ".":
+                    target_dir = error_dir
+                else:
+                    target_dir = os.path.join(error_dir, relative_path)
+                    os.makedirs(target_dir, exist_ok=True)
+                
+                target_path = os.path.join(target_dir, os.path.basename(session_file))
+                try:
+                    shutil.move(session_file, target_path)
+                    logger.warning(f"Session {session_name} moved to {target_path} due to invalidity")
+                except Exception as e:
+                    logger.error(f"Error moving session {session_name}: {e}")
+    
+    if not found:
+        logger.error(f"Session {session_name} not found when attempting to move to error folder")
+
 def get_sessions(sessions_folder: str) -> list[str]:
     session_names = glob.glob(f"{sessions_folder}/*.session")
     session_names += glob.glob(f"{sessions_folder}/telethon/*.session")
@@ -150,9 +197,16 @@ async def get_tg_clients() -> list[UniversalTelegramClient]:
 
         session_proxy = session_config.get('proxy')
         if not session_proxy and 'proxy' in session_config.keys():
-            tg_clients.append(UniversalTelegramClient(**client_params))
-            if accounts_config.get(session_name) != session_config:
-                await config_utils.update_session_config_in_file(session_name, session_config, CONFIG_PATH)
+            try:
+                tg_clients.append(UniversalTelegramClient(**client_params))
+                if accounts_config.get(session_name) != session_config:
+                    await config_utils.update_session_config_in_file(session_name, session_config, CONFIG_PATH)
+            except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError,
+                   SessionPasswordNeededError, PyrogramAuthKeyUnregisteredError,
+                    PyrogramSessionPasswordNeededError,
+                   PyrogramSessionRevoked, InvalidSession) as e:
+                logger.error(f"{session_name} | Session initialization error: {e}")
+                await move_invalid_session_to_error_folder(session_name)
             continue
 
         else:
@@ -166,10 +220,17 @@ async def get_tg_clients() -> list[UniversalTelegramClient]:
                 logger.warning(f"{session_name} | Didn't find a working unused proxy for session | Skipping")
                 continue
             else:
-                tg_clients.append(UniversalTelegramClient(**client_params))
-                session_config['proxy'] = proxy
-                if accounts_config.get(session_name) != session_config:
-                    await config_utils.update_session_config_in_file(session_name, session_config, CONFIG_PATH)
+                try:
+                    tg_clients.append(UniversalTelegramClient(**client_params))
+                    session_config['proxy'] = proxy
+                    if accounts_config.get(session_name) != session_config:
+                        await config_utils.update_session_config_in_file(session_name, session_config, CONFIG_PATH)
+                except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError,
+                      SessionPasswordNeededError, PyrogramAuthKeyUnregisteredError,
+                       PyrogramSessionPasswordNeededError,
+                      PyrogramSessionRevoked, InvalidSession) as e:
+                    logger.error(f"{session_name} | Session initialization error: {e}")
+                    await move_invalid_session_to_error_folder(session_name)
 
     return tg_clients
 
@@ -193,18 +254,57 @@ async def run_tasks() -> None:
     await config_utils.restructure_config(CONFIG_PATH)
     await init_config_file()
     
-    tasks = []
+    base_tasks = []
     
     if settings.AUTO_UPDATE:
         update_manager = UpdateManager()
-        tasks.append(asyncio.create_task(update_manager.run()))
+        base_tasks.append(asyncio.create_task(update_manager.run()))
     
     tg_clients = await get_tg_clients()
-    tasks.extend([asyncio.create_task(run_tapper(tg_client=tg_client)) for tg_client in tg_clients])
-
+    client_tasks = [asyncio.create_task(handle_tapper_session(tg_client=tg_client)) for tg_client in tg_clients]
+    
     try:
-        await asyncio.gather(*tasks)
+        if client_tasks:
+            await asyncio.gather(*client_tasks, return_exceptions=True)
+        
+        for task in base_tasks:
+            if not task.done():
+                task.cancel()
+                
+        await asyncio.gather(*base_tasks, return_exceptions=True)
+        
     except asyncio.CancelledError:
-        for task in tasks:
-            task.cancel()
+        for task in client_tasks + base_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*client_tasks + base_tasks, return_exceptions=True)
         raise
+        
+async def handle_tapper_session(tg_client: UniversalTelegramClient, stats_bot: Optional[object] = None):
+    session_name = tg_client.session_name
+    try:
+        logger.info(f"{session_name} | Starting session")
+        await run_tapper(tg_client=tg_client)
+    except InvalidSession as e:
+        logger.error(f"Invalid session: {session_name}: {e}")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{session_name}] InvalidSession details: {e}")
+        await move_invalid_session_to_error_folder(session_name)
+    except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError, 
+            SessionPasswordNeededError) as e:
+        logger.error(f"Authentication error for Telethon session {session_name}: {e}")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{session_name}] Telethon Auth error details: {e}")
+        await move_invalid_session_to_error_folder(session_name)
+    except (PyrogramAuthKeyUnregisteredError,
+            PyrogramSessionPasswordNeededError, PyrogramSessionRevoked) as e:
+        logger.error(f"Authentication error for Pyrogram session {session_name}: {e}")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{session_name}] Pyrogram Auth error details: {e}")
+        await move_invalid_session_to_error_folder(session_name)
+    except Exception as e:
+        logger.error(f"Unexpected error in session {session_name}: {e}")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{session_name}] Unexpected exception details: {e}")
+    finally:
+        logger.info(f"{session_name} | Session ended")

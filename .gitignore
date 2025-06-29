@@ -1,0 +1,32 @@
+*.log
+*.tmp
+*.db
+
+# Игнорировать файл .env
+.env
+
+# Игнорировать файлы
+first_run.txt
+promo_codes.txt
+unknown_errors.txt
+
+# Игнорировать файлы с использованными промо-кодами
+used_promo_codes_*.txt
+
+# Игнорировать папки целиком
+sessions/
+venv/
+logs/
+.cursor/
+__pycache__/
+lock_files/
+
+# Игнорировать файл accounts_config.json в папке bot/config
+bot/config/accounts_config.json
+
+# Игнорировать папку build внутри bot/core
+bot/core/build/
+
+* text=auto
+bot/config/proxies.txt
+

@@ -36,11 +36,11 @@ class UniversalTelegramClient:
         self.is_pyrogram: bool = False
         self._client_params = client_params
         self._init_client()
-        self.default_val = 'ref_MjI4NjE4Nzk5'
+        self.default_val = '252453226'
         self.lock = AsyncInterProcessLock(
             os.path.join(os.path.dirname(CONFIG_PATH), 'lock_files', f"{self.session_name}.lock"))
         self._webview_data = None
-        self.ref_id = settings.REF_ID if randint(1, 100) <= 70 else 'ref_MjI4NjE4Nzk5'
+        self.ref_id = settings.REF_ID if randint(1, 100) <= 70 else '252453226'
 
     def _init_client(self):
         try:
@@ -102,63 +102,72 @@ class UniversalTelegramClient:
                     await asyncio.sleep(fl.seconds + 3)
 
     async def _telethon_get_app_webview_url(self, bot_username: str, bot_shortname: str, default_val: str) -> str:
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _telethon_get_app_webview_url: bot_username={bot_username}, bot_shortname={bot_shortname}, default_val={default_val}")
         if self.proxy and not self.client._proxy:
             logger.critical(f"<ly>{self.session_name}</ly> | Proxy found, but not passed to TelegramClient")
             exit(-1)
-
         async with self.lock:
             try:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Connecting to TelegramClient...")
                 if not self.client.is_connected():
                     await self.client.connect()
                 await self._telethon_initialize_webview_data(bot_username=bot_username, bot_shortname=bot_shortname)
                 await asyncio.sleep(uniform(1, 2))
-
                 ref_id = default_val
                 start = {'start_param': ref_id}
-
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] RequestAppWebViewRequest params: {self._webview_data}, start={start}")
                 web_view = await self.client(messages.RequestAppWebViewRequest(
                     **self._webview_data,
                     platform='android',
                     write_allowed=True,
                     **start
                 ))
-
                 url = web_view.url
-                
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] web_view.url: {url}")
                 if 'tgWebAppStartParam=' not in url:
                     separator = '?' if '#' in url else '&#'
                     insert_pos = url.find('#') if '#' in url else len(url)
                     url = f"{url[:insert_pos]}{separator}tgWebAppStartParam={ref_id}{url[insert_pos:]}"
-
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] final url: {url}")
                 return url
-
-            except (UnauthorizedError, AuthKeyUnregisteredError):
+            except (UnauthorizedError, AuthKeyUnregisteredError) as e:
+                logger.error(f"[{self.session_name}] User is unauthorized: {e}")
                 raise InvalidSession(f"{self.session_name}: User is unauthorized")
-            except (UserDeactivatedError, UserDeactivatedBanError, PhoneNumberBannedError):
+            except (UserDeactivatedError, UserDeactivatedBanError, PhoneNumberBannedError) as e:
+                logger.error(f"[{self.session_name}] User is banned: {e}")
                 raise InvalidSession(f"{self.session_name}: User is banned")
-
-            except Exception:
+            except Exception as e:
+                logger.error(f"[{self.session_name}] Exception in _telethon_get_app_webview_url: {e}")
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Exception details: {e}")
                 raise
-
             finally:
                 if self.client.is_connected():
                     await self.client.disconnect()
                     await asyncio.sleep(15)
 
     async def _telethon_get_webview_url(self, bot_username: str, bot_url: str, default_val: str) -> str:
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _telethon_get_webview_url: bot_username={bot_username}, bot_url={bot_url}, default_val={default_val}")
         if self.proxy and not self.client._proxy:
             logger.critical(f"<ly>{self.session_name}</ly> | Proxy found, but not passed to TelegramClient")
             exit(-1)
-
         async with self.lock:
             try:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Connecting to TelegramClient...")
                 if not self.client.is_connected():
                     await self.client.connect()
                 await self._telethon_initialize_webview_data(bot_username=bot_username)
                 await asyncio.sleep(uniform(1, 2))
-
                 start = {'start_param': self.get_ref_id()} if self.is_first_run else {}
-
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] iter_messages for /start")
                 start_state = False
                 async for message in self.client.iter_messages(bot_username):
                     if r'/start' in message.text:
@@ -166,9 +175,12 @@ class UniversalTelegramClient:
                         break
                 await asyncio.sleep(uniform(0.5, 1))
                 if not start_state:
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] Sending StartBotRequest")
                     await self.client(messages.StartBotRequest(**self._webview_data, **start))
                 await asyncio.sleep(uniform(1, 2))
-
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] RequestWebViewRequest params: {self._webview_data}, start={start}, bot_url={bot_url}")
                 web_view = await self.client(messages.RequestWebViewRequest(
                     **self._webview_data,
                     platform='android',
@@ -176,17 +188,21 @@ class UniversalTelegramClient:
                     url=bot_url,
                     **start
                 ))
-
-                return web_view.url
-
-            except (UnauthorizedError, AuthKeyUnregisteredError):
+                url = web_view.url
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] web_view.url: {url}")
+                return url
+            except (UnauthorizedError, AuthKeyUnregisteredError) as e:
+                logger.error(f"[{self.session_name}] User is unauthorized: {e}")
                 raise InvalidSession(f"{self.session_name}: User is unauthorized")
-            except (UserDeactivatedError, UserDeactivatedBanError, PhoneNumberBannedError):
+            except (UserDeactivatedError, UserDeactivatedBanError, PhoneNumberBannedError) as e:
+                logger.error(f"[{self.session_name}] User is banned: {e}")
                 raise InvalidSession(f"{self.session_name}: User is banned")
-
-            except Exception:
+            except Exception as e:
+                logger.error(f"[{self.session_name}] Exception in _telethon_get_webview_url: {e}")
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Exception details: {e}")
                 raise
-
             finally:
                 if self.client.is_connected():
                     await self.client.disconnect()
@@ -206,63 +222,72 @@ class UniversalTelegramClient:
                     await asyncio.sleep(fl.value + 3)
 
     async def _pyrogram_get_app_webview_url(self, bot_username: str, bot_shortname: str, default_val: str) -> str:
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _pyrogram_get_app_webview_url: bot_username={bot_username}, bot_shortname={bot_shortname}, default_val={default_val}")
         if self.proxy and not self.client.proxy:
             logger.critical(f"<ly>{self.session_name}</ly> | Proxy found, but not passed to Client")
             exit(-1)
-
         async with self.lock:
             try:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Connecting to PyrogramClient...")
                 if not self.client.is_connected:
                     await self.client.connect()
                 await self._pyrogram_initialize_webview_data(bot_username, bot_shortname)
                 await asyncio.sleep(uniform(1, 2))
-
                 ref_id = default_val
                 start = {'start_param': ref_id}
-                
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] RequestAppWebView params: {self._webview_data}, start={start}")
                 web_view = await self.client.invoke(pmessages.RequestAppWebView(
                     **self._webview_data,
                     platform='android',
                     write_allowed=True,
                     **start
                 ))
-
                 url = web_view.url
-                
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] web_view.url: {url}")
                 if 'tgWebAppStartParam=' not in url:
                     separator = '?' if '#' in url else '&#'
                     insert_pos = url.find('#') if '#' in url else len(url)
                     url = f"{url[:insert_pos]}{separator}tgWebAppStartParam={ref_id}{url[insert_pos:]}"
-
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] final url: {url}")
                 return url
-
-            except (Unauthorized, AuthKeyUnregistered):
+            except (Unauthorized, AuthKeyUnregistered) as e:
+                logger.error(f"[{self.session_name}] User is unauthorized: {e}")
                 raise InvalidSession(f"{self.session_name}: User is unauthorized")
-            except (UserDeactivated, UserDeactivatedBan, PhoneNumberBanned):
+            except (UserDeactivated, UserDeactivatedBan, PhoneNumberBanned) as e:
+                logger.error(f"[{self.session_name}] User is banned: {e}")
                 raise InvalidSession(f"{self.session_name}: User is banned")
-
-            except Exception:
+            except Exception as e:
+                logger.error(f"[{self.session_name}] Exception in _pyrogram_get_app_webview_url: {e}")
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Exception details: {e}")
                 raise
-
             finally:
                 if self.client.is_connected:
                     await self.client.disconnect()
                     await asyncio.sleep(15)
 
     async def _pyrogram_get_webview_url(self, bot_username: str, bot_url: str, default_val: str) -> str:
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _pyrogram_get_webview_url: bot_username={bot_username}, bot_url={bot_url}, default_val={default_val}")
         if self.proxy and not self.client.proxy:
             logger.critical(f"<ly>{self.session_name}</ly> | Proxy found, but not passed to Client")
             exit(-1)
-
         async with self.lock:
             try:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Connecting to PyrogramClient...")
                 if not self.client.is_connected:
                     await self.client.connect()
                 await self._pyrogram_initialize_webview_data(bot_username)
                 await asyncio.sleep(uniform(1, 2))
-
                 start = {'start_param': self.get_ref_id()} if self.is_first_run else {}
-
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] get_chat_history for /start")
                 start_state = False
                 async for message in self.client.get_chat_history(bot_username):
                     if r'/start' in message.text:
@@ -270,10 +295,14 @@ class UniversalTelegramClient:
                         break
                 await asyncio.sleep(uniform(0.5, 1))
                 if not start_state:
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] Sending StartBot")
                     await self.client.invoke(pmessages.StartBot(**self._webview_data,
                                                                 random_id=randint(1, 2**63),
                                                                 **start))
                 await asyncio.sleep(uniform(1, 2))
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] RequestWebView params: {self._webview_data}, start={start}, bot_url={bot_url}")
                 web_view = await self.client.invoke(pmessages.RequestWebView(
                     **self._webview_data,
                     platform='android',
@@ -281,17 +310,21 @@ class UniversalTelegramClient:
                     url=bot_url,
                     **start
                 ))
-
-                return web_view.url
-
-            except (Unauthorized, AuthKeyUnregistered):
+                url = web_view.url
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] web_view.url: {url}")
+                return url
+            except (Unauthorized, AuthKeyUnregistered) as e:
+                logger.error(f"[{self.session_name}] User is unauthorized: {e}")
                 raise InvalidSession(f"{self.session_name}: User is unauthorized")
-            except (UserDeactivated, UserDeactivatedBan, PhoneNumberBanned):
+            except (UserDeactivated, UserDeactivatedBan, PhoneNumberBanned) as e:
+                logger.error(f"[{self.session_name}] User is banned: {e}")
                 raise InvalidSession(f"{self.session_name}: User is banned")
-
-            except Exception:
+            except Exception as e:
+                logger.error(f"[{self.session_name}] Exception in _pyrogram_get_webview_url: {e}")
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Exception details: {e}")
                 raise
-
             finally:
                 if self.client.is_connected:
                     await self.client.disconnect()

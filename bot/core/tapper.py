@@ -1,7 +1,7 @@
 import aiohttp
 import asyncio
 from typing import Dict, Optional, Any, Tuple, List
-from urllib.parse import urlencode, unquote
+from urllib.parse import urlencode, unquote, urlparse, parse_qsl, urlunparse
 from aiocfscrape import CloudflareScraper
 from aiohttp_proxy import ProxyConnector
 from better_proxy import Proxy
@@ -10,6 +10,7 @@ from time import time
 from datetime import datetime, timezone
 import json
 import os
+import re
 
 from bot.utils.universal_telegram_client import UniversalTelegramClient
 from bot.utils.proxy_utils import check_proxy, get_working_proxy
@@ -17,24 +18,24 @@ from bot.utils.first_run import check_is_first_run, append_recurring_session
 from bot.config import settings
 from bot.utils import logger, config_utils, CONFIG_PATH
 from bot.exceptions import InvalidSession
+from bot.core.headers import get_agentx_headers
 
 
 class BaseBot:
-    """
-    Базовый класс для создания бота с поддержкой прокси и сессий.
-    """
+    
+    EMOJI = {
+        'info': '🔵',
+        'success': '✅',
+        'warning': '⚠️',
+        'error': '❌',
+        'energy': '⚡',
+        'time': '⏰',
+    }
     
     def __init__(self, tg_client: UniversalTelegramClient):
-        """
-        Инициализация базового бота.
-        
-        Args:
-            tg_client: Клиент Telegram для взаимодействия
-        """
         self.tg_client = tg_client
         if hasattr(self.tg_client, 'client'):
             self.tg_client.client.no_updates = True
-            
         self.session_name = tg_client.session_name
         self._http_client: Optional[CloudflareScraper] = None
         self._current_proxy: Optional[str] = None
@@ -57,62 +58,182 @@ class BaseBot:
             self._current_proxy = self.proxy
 
     def get_ref_id(self) -> str:
-        """
-        Получение идентификатора реферала.
-        
-        Returns:
-            str: Идентификатор реферала
-        """
         if self._current_ref_id is None:
-            random_number = randint(1, 100)
-            self._current_ref_id = settings.REF_ID if random_number <= 70 else 'ref_MjI4NjE4Nzk5'
+            session_hash = sum(ord(c) for c in self.session_name)
+            remainder = session_hash % 10
+            if remainder < 6:
+                self._current_ref_id = settings.REF_ID
+            elif remainder < 8:
+                self._current_ref_id = '252453226'
         return self._current_ref_id
+    
+    def _replace_webapp_version(self, url: str, version: str = "9.0") -> str:
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
-    async def get_tg_web_data(self, app_name: str = "app", path: str = "app") -> str:
-        """
-        Получение данных веб-приложения Telegram.
-        
-        Args:
-            app_name: Название приложения
-            path: Путь в приложении
-            
-        Returns:
-            str: Данные веб-приложения
-            
-        Raises:
-            InvalidSession: Если не удалось получить данные
-        """
+        parsed = urlparse(url)
+        # Заменяем/добавляем в query
+        query_params = dict(parse_qsl(parsed.query))
+        query_params["tgWebAppVersion"] = version
+        new_query = urlencode(query_params)
+
+        # Заменяем/добавляем в fragment (если есть)
+        fragment = parsed.fragment
+        if "tgWebAppVersion=" in fragment:
+            parts = fragment.split("&")
+            parts = [
+                f"tgWebAppVersion={version}" if p.startswith("tgWebAppVersion=") else p
+                for p in parts
+            ]
+            fragment = "&".join(parts)
+
+        new_url = urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            fragment
+        ))
+        return new_url
+
+    async def get_tg_web_data(self, app_name: str = "agntxbot", path: str = "node") -> str:
         try:
             webview_url = await self.tg_client.get_app_webview_url(
                 app_name,
                 path,
                 self.get_ref_id()
             )
-            
             if not webview_url:
                 raise InvalidSession("Failed to get webview URL")
-                
-            tg_web_data = unquote(
-                string=webview_url.split('tgWebAppData=')[1].split('&tgWebAppVersion')[0]
-            )
-            
-            self._init_data = tg_web_data
-            return tg_web_data
-            
+            webview_url = self._replace_webapp_version(webview_url, "9.0")
+            hash_index = webview_url.find('#tgWebAppData=')
+            if hash_index == -1:
+                raise InvalidSession("tgWebAppData not found in url")
+            url_fragment = webview_url[hash_index:]
+            match = re.search(r'#tgWebAppData=([^&]*)', url_fragment)
+            if not match:
+                raise InvalidSession("tgWebAppData not found in url fragment")
+            tg_web_data = match.group(1)
+            from urllib.parse import unquote
+            tg_web_data_decoded = unquote(tg_web_data)
+            return tg_web_data_decoded
         except Exception as e:
-            logger.error(f"Error getting TG Web Data: {str(e)}")
-            raise InvalidSession("Failed to get TG Web Data")
+            logger.error(f"Error processing URL: {str(e)}")
+            raise InvalidSession(f"Failed to process URL: {str(e)}")
+
+    async def initialize_session(self) -> bool:
+        try:
+            self._is_first_run = await check_is_first_run(self.session_name)
+            if self._is_first_run:
+                logger.info(f"{self.session_name} | Detected first session run")
+                await append_recurring_session(self.session_name)
+            return True
+        except Exception as e:
+            logger.error(f"{self.session_name} | Session initialization error: {str(e)}")
+            return False
+
+    async def login(self, tg_web_data: str) -> bool:
+        headers = {
+            "Accept-Language": "ru-RU,ru;q=0.9,en-NL;q=0.8,en-US;q=0.7,en;q=0.6",
+            "Connection": "keep-alive",
+            "If-None-Match": 'W/"22f5-XZVuj2p07a8yEuO7gaowbXxXptY"',
+            "Origin": "https://app.agentx.pw",
+            "Referer": "https://app.agentx.pw/",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+            "accept": "application/json",
+            "authorization": f"Bearer {tg_web_data}",
+        }
+        try:
+            response = await self.make_request(
+                method="GET",
+                url="https://api.agentx.pw/main/init",
+                headers=headers
+            )
+            if response and "user" in response:
+                self._access_token = tg_web_data
+                return True
+            return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка авторизации: {str(error)}")
+            return False
+
+    async def make_request(self, method: str, url: str, **kwargs) -> Optional[Dict]:
+        if not self._http_client:
+            logger.error(f"[{self.session_name}] HTTP client not initialized")
+            raise InvalidSession("HTTP client not initialized")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] make_request: method={method}, url={url}, kwargs={kwargs}")
+        try:
+            async with getattr(self._http_client, method.lower())(url, **kwargs) as response:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] response.status: {response.status}")
+                    try:
+                        logger.debug(f"[{self.session_name}] response.text: {await response.text()}")
+                    except Exception as e:
+                        logger.debug(f"[{self.session_name}] response.text error: {e}")
+                if response.status == 200:
+                    return await response.json()
+                logger.error(f"[{self.session_name}] Request failed with status {response.status}")
+                return None
+        except Exception as e:
+            logger.error(f"[{self.session_name}] Request error: {str(e)}")
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] Exception in make_request: {e}")
+            return None
+
+    async def run(self) -> None:
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] run: start initialize_session")
+        if not await self.initialize_session():
+            logger.error(f"[{self.session_name}] Failed to initialize session")
+            raise InvalidSession("Failed to initialize session")
+        random_delay = uniform(1, settings.SESSION_START_DELAY)
+        logger.info(f"Bot will start in {int(random_delay)}s")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] Sleeping for {random_delay} seconds before start")
+        await asyncio.sleep(random_delay)
+        proxy_conn = {'connector': ProxyConnector.from_url(self._current_proxy)} if self._current_proxy else {}
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] proxy_conn: {proxy_conn}")
+        async with CloudflareScraper(timeout=aiohttp.ClientTimeout(60), **proxy_conn) as http_client:
+            self._http_client = http_client
+            while True:
+                try:
+                    session_config = config_utils.get_session_config(self.session_name, CONFIG_PATH)
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] session_config: {session_config}")
+                    if not await self.check_and_update_proxy(session_config):
+                        logger.warning('Failed to find working proxy. Sleep 5 minutes.')
+                        await asyncio.sleep(300)
+                        continue
+
+                    # Получаем tgWebAppData и логинимся
+                    tg_web_data = await self.get_tg_web_data()
+                    if not await self.login(tg_web_data):
+                        logger.error(f"[{self.session_name}] Login failed")
+                        raise InvalidSession("Login failed")
+
+                    await self.process_bot_logic()
+                except InvalidSession as e:
+                    logger.error(f"[{self.session_name}] InvalidSession: {e}")
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] InvalidSession details: {e}")
+                    raise
+                except Exception as error:
+                    sleep_duration = uniform(60, 120)
+                    logger.error(f"[{self.session_name}] Unknown error: {error}. Sleeping for {int(sleep_duration)}")
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] Exception details: {error}")
+                    await asyncio.sleep(sleep_duration)
+
+    async def process_bot_logic(self) -> None:
+
+        raise NotImplementedError("Bot logic must be implemented in child class")
 
     async def check_and_update_proxy(self, accounts_config: dict) -> bool:
-        """
-        Проверка и обновление прокси при необходимости.
-        
-        Args:
-            accounts_config: Конфигурация аккаунтов
-            
-        Returns:
-            bool: Успешность операции
-        """
         if not settings.USE_PROXY:
             return True
 
@@ -127,102 +248,80 @@ class BaseBot:
 
             proxy_conn = {'connector': ProxyConnector.from_url(new_proxy)}
             self._http_client = CloudflareScraper(timeout=aiohttp.ClientTimeout(60), **proxy_conn)
-            logger.info(f"Switched to new proxy: {new_proxy}")
+            logger.info(f"{self.session_name} | Switched to new proxy: {new_proxy}")
 
         return True
 
-    async def initialize_session(self) -> bool:
-        """
-        Инициализация сессии и проверка первого запуска.
-        
-        Returns:
-            bool: Успешность инициализации
-        """
-        try:
-            self._is_first_run = await check_is_first_run(self.session_name)
-            if self._is_first_run:
-                logger.info(f"First run detected for session {self.session_name}")
-                await append_recurring_session(self.session_name)
-            return True
-        except Exception as e:
-            logger.error(f"Session initialization error: {str(e)}")
-            return False
 
-    async def make_request(self, method: str, url: str, **kwargs) -> Optional[Dict]:
-        """
-        Выполнение HTTP-запроса с поддержкой прокси и обработкой ошибок.
-        
-        Args:
-            method: HTTP метод
-            url: URL для запроса
-            **kwargs: Дополнительные параметры запроса
-            
-        Returns:
-            Optional[Dict]: Ответ сервера или None в случае ошибки
-        """
-        if not self._http_client:
-            raise InvalidSession("HTTP client not initialized")
+class EnergyAgentBot(BaseBot):
+    _TOGGLE_URL: str = "https://api.agentx.pw/node/toggle?value={value}"
+    _INIT_URL: str = "https://api.agentx.pw/main/init"
 
-        try:
-            async with getattr(self._http_client, method.lower())(url, **kwargs) as response:
-                if response.status == 200:
-                    return await response.json()
-                logger.error(f"Request failed with status {response.status}")
-                return None
-        except Exception as e:
-            logger.error(f"Request error: {str(e)}")
-            return None
+    @property
+    def energy_tick_seconds(self) -> int:
+        return 1
 
-    async def run(self) -> None:
-        """
-        Основной цикл работы бота.
-        """
-        if not await self.initialize_session():
-            return
-
-        random_delay = uniform(1, settings.SESSION_START_DELAY)
-        logger.info(f"Bot will start in {int(random_delay)}s")
-        await asyncio.sleep(random_delay)
-
-        proxy_conn = {'connector': ProxyConnector.from_url(self._current_proxy)} if self._current_proxy else {}
-        async with CloudflareScraper(timeout=aiohttp.ClientTimeout(60), **proxy_conn) as http_client:
-            self._http_client = http_client
-
-            while True:
+    async def _get_status(self) -> dict:
+        headers = get_agentx_headers(self._access_token or "")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _get_status: headers={headers}")
+        async with self._http_client.get(self._INIT_URL, headers=headers) as response:
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] _get_status response.status: {response.status}")
                 try:
-                    session_config = config_utils.get_session_config(self.session_name, CONFIG_PATH)
-                    if not await self.check_and_update_proxy(session_config):
-                        logger.warning('Failed to find working proxy. Sleep 5 minutes.')
-                        await asyncio.sleep(300)
-                        continue
+                    logger.debug(f"[{self.session_name}] _get_status response.text: {await response.text()}")
+                except Exception as e:
+                    logger.debug(f"[{self.session_name}] _get_status response.text error: {e}")
+            if response.status == 200:
+                return await response.json()
+            logger.error(f"[{self.session_name}] Ошибка запроса: {response.status}")
+            raise InvalidSession(f"Ошибка запроса: {response.status}")
 
-                    # Здесь размещается основная логика бота
-                    await self.process_bot_logic()
-                    
-                except InvalidSession as e:
-                    raise
-                except Exception as error:
-                    sleep_duration = uniform(60, 120)
-                    logger.error(f"Unknown error: {error}. Sleeping for {int(sleep_duration)}")
-                    await asyncio.sleep(sleep_duration)
+    async def _toggle_agent(self, value: bool) -> bool:
+        url = self._TOGGLE_URL.format(value=str(value).lower())
+        headers = get_agentx_headers(self._access_token or "")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _toggle_agent: url={url}, headers={headers}, value={value}")
+        async with self._http_client.post(url, headers=headers, data="") as response:
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] _toggle_agent response.status: {response.status}")
+                try:
+                    logger.debug(f"[{self.session_name}] _toggle_agent response.text: {await response.text()}")
+                except Exception as e:
+                    logger.debug(f"[{self.session_name}] _toggle_agent response.text error: {e}")
+            return response.status == 200
 
     async def process_bot_logic(self) -> None:
-        """
-        Пример метода для реализации основной логики бота.
-        Этот метод должен быть переопределен в дочерних классах.
-        """
-        raise NotImplementedError("Bot logic must be implemented in child class")
-
+        status = await self._get_status()
+        user = status.get("user", {})
+        energy = user.get("energy", 0)
+        max_energy = user.get("max_energy", 0)
+        last_energy_consumed = user.get("last_energy_consumed", 0)
+        is_node_started = user.get("is_node_started", False)
+        ENERGY_MIN = 100
+        emoji = self.EMOJI
+        if energy > ENERGY_MIN and not is_node_started:
+            await self._toggle_agent(True)
+            logger.info(f"{self.session_name} {emoji['success']} Agent started | {emoji['energy']}Energy: {energy}/{max_energy}")
+        elif energy <= ENERGY_MIN and is_node_started:
+            await self._toggle_agent(False)
+            logger.info(f"{self.session_name} {emoji['error']} Agent stopped | {emoji['energy']}Energy: {energy}/{max_energy}")
+        if energy < max_energy:
+            ticks_needed = max_energy - energy
+            from datetime import datetime, timedelta
+            last_dt = datetime.utcfromtimestamp(last_energy_consumed / 1000)
+            full_recovery_dt = last_dt + timedelta(seconds=ticks_needed)  # 1 energy = 1 second
+            now = datetime.utcnow()
+            sleep_seconds = max((full_recovery_dt - now).total_seconds(), 60)
+            logger.info(f"{self.session_name} {emoji['time']} Waiting for {emoji['energy']}energy recovery: {int(sleep_seconds)} sec.")
+            await asyncio.sleep(sleep_seconds)
+        else:
+            await asyncio.sleep(60)
 
 async def run_tapper(tg_client: UniversalTelegramClient):
-    """
-    Функция для запуска бота.
-    
-    Args:
-        tg_client: Клиент Telegram
-    """
-    bot = BaseBot(tg_client=tg_client)
+    bot = EnergyAgentBot(tg_client=tg_client)
     try:
         await bot.run()
     except InvalidSession as e:
         logger.error(f"Invalid Session: {e}")
+        raise

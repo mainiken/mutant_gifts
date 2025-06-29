@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     SESSION_START_DELAY: int = 360
 
-    REF_ID: str = 'ref_MjI4NjE4Nzk5'
+    REF_ID: str = '252453226'
     SESSIONS_PER_PROXY: int = 1
     USE_PROXY: bool = True
     DISABLE_PROXY_REPLACE: bool = False
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     DEBUG_LOGGING: bool = False
 
     AUTO_UPDATE: bool = True
-    CHECK_UPDATE_INTERVAL: int = 300
+    CHECK_UPDATE_INTERVAL: int = 60
     BLACKLISTED_SESSIONS: str = ""
 
     @property

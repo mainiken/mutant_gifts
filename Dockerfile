@@ -1,4 +1,4 @@
-FROM python:3.10
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
 
 ENV PYTHONUNBUFFERED=1
 ENV TERM=xterm-256color
@@ -13,12 +13,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app/
 
-COPY requirements.txt requirements.txt
-
-RUN pip3 install --upgrade pip setuptools wheel
-
-RUN pip3 install --no-warn-script-location --no-cache-dir -r requirements.txt
+COPY requirements.txt .
+RUN uv venv
+RUN uv pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["python3", "main.py", "-a", "1"]
+CMD ["uv", "run", "main.py", "-a", "1"]
