@@ -40,6 +40,7 @@ class BaseBot:
         self._http_client: Optional[CloudflareScraper] = None
         self._current_proxy: Optional[str] = None
         self._access_token: Optional[str] = None
+        self._refresh_token: Optional[str] = None
         self._is_first_run: Optional[bool] = None
         self._init_data: Optional[str] = None
         self._current_ref_id: Optional[str] = None
@@ -154,10 +155,38 @@ class BaseBot:
             )
             if response and "user" in response:
                 self._access_token = tg_web_data
+                self._refresh_token = response.get("refreshToken")
                 return True
             return False
         except Exception as error:
             logger.error(f"{self.session_name} | Ошибка авторизации: {str(error)}")
+            return False
+
+    async def refresh_token(self) -> bool:
+        """
+        Обновляет access_token с помощью refresh_token.
+        Возвращает True при успехе, иначе False.
+        """
+        if not self._refresh_token:
+            return False
+        headers = {
+            "accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with self._http_client.post(
+                "https://api.agentx.pw/auth/refresh",
+                headers=headers,
+                json={"refreshToken": self._refresh_token}
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    self._access_token = data.get("accessToken")
+                    self._refresh_token = data.get("refreshToken")
+                    return True
+                return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка обновления токена: {str(error)}")
             return False
 
     async def make_request(self, method: str, url: str, **kwargs) -> Optional[Dict]:
@@ -166,23 +195,38 @@ class BaseBot:
             raise InvalidSession("HTTP client not initialized")
         if settings.DEBUG_LOGGING:
             logger.debug(f"[{self.session_name}] make_request: method={method}, url={url}, kwargs={kwargs}")
-        try:
-            async with getattr(self._http_client, method.lower())(url, **kwargs) as response:
+        for attempt in range(2):
+            try:
+                async with getattr(self._http_client, method.lower())(url, **kwargs) as response:
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] response.status: {response.status}")
+                        try:
+                            logger.debug(f"[{self.session_name}] response.text: {await response.text()}")
+                        except Exception as e:
+                            logger.debug(f"[{self.session_name}] response.text error: {e}")
+                    if response.status == 200:
+                        return await response.json()
+                    if response.status in (401, 502, 403, 418):
+                        logger.warning(f"[{self.session_name}] Access token expired or server error, пытаюсь refresh...")
+                        refreshed = await self.refresh_token()
+                        if refreshed:
+                            logger.info(f"[{self.session_name}] Access token refreshed, повтор запроса...")
+                            continue
+                        logger.warning(f"[{self.session_name}] Refresh не удался, пробую re-login...")
+                        tg_web_data = await self.get_tg_web_data()
+                        relogin = await self.login(tg_web_data)
+                        if relogin:
+                            logger.info(f"[{self.session_name}] Re-login успешен, повтор запроса...")
+                            continue
+                        logger.error(f"[{self.session_name}] Не удалось refresh/re-login, InvalidSession")
+                        raise InvalidSession("Access token expired and could not be refreshed")
+                    logger.error(f"[{self.session_name}] Request failed with status {response.status}")
+                    return None
+            except Exception as e:
+                logger.error(f"[{self.session_name}] Request error: {str(e)}")
                 if settings.DEBUG_LOGGING:
-                    logger.debug(f"[{self.session_name}] response.status: {response.status}")
-                    try:
-                        logger.debug(f"[{self.session_name}] response.text: {await response.text()}")
-                    except Exception as e:
-                        logger.debug(f"[{self.session_name}] response.text error: {e}")
-                if response.status == 200:
-                    return await response.json()
-                logger.error(f"[{self.session_name}] Request failed with status {response.status}")
+                    logger.debug(f"[{self.session_name}] Exception in make_request: {e}")
                 return None
-        except Exception as e:
-            logger.error(f"[{self.session_name}] Request error: {str(e)}")
-            if settings.DEBUG_LOGGING:
-                logger.debug(f"[{self.session_name}] Exception in make_request: {e}")
-            return None
 
     async def run(self) -> None:
         if settings.DEBUG_LOGGING:
