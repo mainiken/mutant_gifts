@@ -50,7 +50,18 @@ START_TEXT = f"""
 {Fore.RED}ATENÇÃO: Esta fazenda não se destina à venda!{Style.RESET_ALL}
 
 {Fore.LIGHTMAGENTA_EX} 
-LOGO
+
+ ▄▄▄        ▄████ ▓█████  ███▄    █ ▄▄▄█████▓▒██   ██▒
+▒████▄     ██▒ ▀█▒▓█   ▀  ██ ▀█   █ ▓  ██▒ ▓▒▒▒ █ █ ▒░
+▒██  ▀█▄  ▒██░▄▄▄░▒███   ▓██  ▀█ ██▒▒ ▓██░ ▒░░░  █   ░
+░██▄▄▄▄██ ░▓█  ██▓▒▓█  ▄ ▓██▒  ▐▌██▒░ ▓██▓ ░  ░ █ █ ▒ 
+ ▓█   ▓██▒░▒▓███▀▒░▒████▒▒██░   ▓██░  ▒██▒ ░ ▒██▒ ▒██▒
+ ▒▒   ▓▒█░ ░▒   ▒ ░░ ▒░ ░░ ▒░   ▒ ▒   ▒ ░░   ▒▒ ░ ░▓ ░
+  ▒   ▒▒ ░  ░   ░  ░ ░  ░░ ░░   ░ ▒░    ░    ░░   ░▒ ░
+  ░   ▒   ░ ░   ░    ░      ░   ░ ░   ░       ░    ░  
+      ░  ░      ░    ░  ░         ░           ░    ░  
+                                                      
+
 {Style.RESET_ALL}
 {Fore.CYAN}Select action:{Style.RESET_ALL}
 
@@ -59,7 +70,7 @@ LOGO
     {Fore.GREEN}3. Create session via QR{Style.RESET_ALL}
     {Fore.GREEN}4. Upload sessions via web (BETA){Style.RESET_ALL}
 
-{Fore.CYAN}Developed by: @Mffff4{Style.RESET_ALL}
+{Fore.CYAN}Developed by: @mainiken{Style.RESET_ALL}
 {Fore.CYAN}Our Telegram channel: {Fore.BLUE}https://t.me/+x8gutImPtaQyN2Ey{Style.RESET_ALL}
 """
 

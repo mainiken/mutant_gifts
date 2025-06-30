@@ -310,7 +310,7 @@ class EnergyAgentBot(BaseBot):
             ticks_needed = max_energy - energy
             from datetime import datetime, timedelta
             last_dt = datetime.utcfromtimestamp(last_energy_consumed / 1000)
-            full_recovery_dt = last_dt + timedelta(seconds=ticks_needed)  # 1 energy = 1 second
+            full_recovery_dt = last_dt + timedelta(seconds=ticks_needed * 2)  # 1 energy = 2 seconds
             now = datetime.utcnow()
             sleep_seconds = max((full_recovery_dt - now).total_seconds(), 60)
             logger.info(f"{self.session_name} {emoji['time']} Waiting for {emoji['energy']}energy recovery: {int(sleep_seconds)} sec.")
