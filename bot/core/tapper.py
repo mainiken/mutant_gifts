@@ -274,8 +274,28 @@ class BaseBot:
                     await asyncio.sleep(sleep_duration)
 
     async def process_bot_logic(self) -> None:
-
-        raise NotImplementedError("Bot logic must be implemented in child class")
+        status = await self._get_status()
+        user = status.get("user", {})
+        energy = user.get("energy", 0)
+        max_energy = user.get("max_energy", 0)
+        last_energy_consumed = user.get("last_energy_consumed", 0)
+        is_node_started = user.get("is_node_started", False)
+        ENERGY_MIN = 100
+        emoji = self.EMOJI
+        if energy > ENERGY_MIN and not is_node_started:
+            await self._toggle_agent(True)
+            logger.info(f"{self.session_name} {emoji['success']} Agent started | {emoji['energy']}Energy: {energy}/{max_energy}")
+        elif energy <= ENERGY_MIN and is_node_started:
+            await self._toggle_agent(False)
+            logger.info(f"{self.session_name} {emoji['error']} Agent stopped | {emoji['energy']}Energy: {energy}/{max_energy}")
+        if energy < max_energy:
+            # Восстановление с 0 до max_energy всегда занимает 2 часа (7200 секунд)
+            recovery_seconds = 7200 * (max_energy - energy) / max_energy
+            sleep_seconds = max(int(recovery_seconds), 60)
+            logger.info(f"{self.session_name} {emoji['time']} Ожидание восстановления энергии: {int(sleep_seconds)} сек.")
+            await asyncio.sleep(sleep_seconds)
+        else:
+            await asyncio.sleep(60)
 
     async def check_and_update_proxy(self, accounts_config: dict) -> bool:
         if not settings.USE_PROXY:
@@ -334,33 +354,6 @@ class EnergyAgentBot(BaseBot):
                 except Exception as e:
                     logger.debug(f"[{self.session_name}] _toggle_agent response.text error: {e}")
             return response.status == 200
-
-    async def process_bot_logic(self) -> None:
-        status = await self._get_status()
-        user = status.get("user", {})
-        energy = user.get("energy", 0)
-        max_energy = user.get("max_energy", 0)
-        last_energy_consumed = user.get("last_energy_consumed", 0)
-        is_node_started = user.get("is_node_started", False)
-        ENERGY_MIN = 100
-        emoji = self.EMOJI
-        if energy > ENERGY_MIN and not is_node_started:
-            await self._toggle_agent(True)
-            logger.info(f"{self.session_name} {emoji['success']} Agent started | {emoji['energy']}Energy: {energy}/{max_energy}")
-        elif energy <= ENERGY_MIN and is_node_started:
-            await self._toggle_agent(False)
-            logger.info(f"{self.session_name} {emoji['error']} Agent stopped | {emoji['energy']}Energy: {energy}/{max_energy}")
-        if energy < max_energy:
-            ticks_needed = max_energy - energy
-            from datetime import datetime, timedelta
-            last_dt = datetime.utcfromtimestamp(last_energy_consumed / 1000)
-            full_recovery_dt = last_dt + timedelta(seconds=ticks_needed * 2)  # 1 energy = 2 seconds
-            now = datetime.utcnow()
-            sleep_seconds = max((full_recovery_dt - now).total_seconds(), 60)
-            logger.info(f"{self.session_name} {emoji['time']} Waiting for {emoji['energy']}energy recovery: {int(sleep_seconds)} sec.")
-            await asyncio.sleep(sleep_seconds)
-        else:
-            await asyncio.sleep(60)
 
 async def run_tapper(tg_client: UniversalTelegramClient):
     bot = EnergyAgentBot(tg_client=tg_client)
