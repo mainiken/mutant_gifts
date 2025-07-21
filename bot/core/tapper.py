@@ -139,7 +139,7 @@ class BaseBot:
             "Connection": "keep-alive",
             "If-None-Match": 'W/"22f5-XZVuj2p07a8yEuO7gaowbXxXptY"',
             "Origin": "https://app.agentx.pw",
-            "Referer": "https://app.agentx.pw/",
+            "Referer": f"https://app.agentx.pw/?tgWebAppStartParam={self.get_ref_id()}",
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
