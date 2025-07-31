@@ -276,22 +276,26 @@ class BaseBot:
     async def process_bot_logic(self) -> None:
         status = await self._get_status()
         user = status.get("user", {})
-        
+
         # Базовый узел
         energy = user.get("energy", 0)
         max_energy = user.get("max_energy", 0)
         is_node_deployed = user.get("is_node_deployed", False)
         is_node_started = user.get("is_node_started", False)
-        
+
         # Pro узел
         pro_energy = user.get("pro_energy", 0)
         pro_max_energy = user.get("pro_max_energy", 0)
         is_pro_deployed = user.get("is_pro_deployed", False)
         is_pro_started = user.get("is_pro_started", False)
-        
+
         ENERGY_MIN = 100
         emoji = self.EMOJI
-        
+
+        # Время до полной зарядки (секунды)
+        basic_recovery = None
+        pro_recovery = None
+
         # Логика для базового узла (x-basic)
         if is_node_deployed:
             if energy >= max_energy and not is_node_started:
@@ -300,7 +304,11 @@ class BaseBot:
             elif energy < ENERGY_MIN and is_node_started:
                 await self._toggle_basic_agent(False)
                 logger.info(f"{self.session_name} {emoji['error']} Basic Agent stopped | {emoji['energy']}Energy: {energy}/{max_energy}")
-        
+            if energy < max_energy:
+                basic_recovery = int(7200 * (max_energy - energy) / max_energy)
+        else:
+            logger.info(f"{self.session_name} {emoji['warning']} Basic node not deployed")
+
         # Логика для pro узла (x-pro)
         if is_pro_deployed:
             if pro_energy >= pro_max_energy and not is_pro_started:
@@ -309,24 +317,36 @@ class BaseBot:
             elif pro_energy < ENERGY_MIN and is_pro_started:
                 await self._toggle_pro_agent(False)
                 logger.info(f"{self.session_name} {emoji['error']} Pro Agent stopped | {emoji['energy']}Pro Energy: {pro_energy}/{pro_max_energy}")
-        
-        # Определяем время ожидания на основе самого быстрого восстановления энергии
-        sleep_seconds = 60  # минимальное время ожидания
-        
-        if energy < max_energy:
-            # Восстановление базового узла с 0 до max_energy всегда занимает 2 часа (7200 секунд)
-            recovery_seconds = 7200 * (max_energy - energy) / max_energy
-            sleep_seconds = max(int(recovery_seconds), 60)
-            logger.info(f"{self.session_name} {emoji['time']} Ожидание восстановления базовой энергии: {int(sleep_seconds)} сек.")
-        
-        if is_pro_deployed and pro_energy < pro_max_energy:
-            # Восстановление pro узла с 0 до pro_max_energy всегда занимает 2 часа (7200 секунд)
-            pro_recovery_seconds = 7200 * (pro_max_energy - pro_energy) / pro_max_energy
-            pro_sleep_seconds = max(int(pro_recovery_seconds), 60)
-            # Берем минимальное время из двух узлов
-            sleep_seconds = min(sleep_seconds, pro_sleep_seconds)
-            logger.info(f"{self.session_name} {emoji['time']} Ожидание восстановления pro энергии: {int(pro_sleep_seconds)} сек.")
-        
+            if pro_energy < pro_max_energy:
+                pro_recovery = int(7200 * (pro_max_energy - pro_energy) / pro_max_energy)
+        else:
+            logger.info(f"{self.session_name} {emoji['warning']} Pro node not deployed")
+
+        # Формируем строку статуса
+        status_parts = []
+        if is_node_deployed:
+            if basic_recovery is not None:
+                status_parts.append(f"x-basic {int(energy)}/{int(max_energy)} энергии, до перезарядки {basic_recovery} сек.")
+            else:
+                status_parts.append(f"x-basic {int(energy)}/{int(max_energy)} энергии, полностью заряжен")
+        else:
+            status_parts.append("x-basic не развернут")
+
+        if is_pro_deployed:
+            if pro_recovery is not None:
+                status_parts.append(f"pro {int(pro_energy)}/{int(pro_max_energy)} энергии, до перезарядки {pro_recovery} сек.")
+            else:
+                status_parts.append(f"pro {int(pro_energy)}/{int(pro_max_energy)} энергии, полностью заряжен")
+        else:
+            status_parts.append("pro не развернут")
+
+        # Определяем минимальное время сна
+        sleep_seconds = 60
+        sleep_candidates = [v for v in [basic_recovery, pro_recovery] if v is not None]
+        if sleep_candidates:
+            sleep_seconds = max(min(sleep_candidates), 60)
+
+        logger.info(f"{self.session_name} | {'; '.join(status_parts)}; засыпаем на {sleep_seconds} сек.")
         await asyncio.sleep(sleep_seconds)
 
     async def check_and_update_proxy(self, accounts_config: dict) -> bool:
