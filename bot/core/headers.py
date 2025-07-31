@@ -5,7 +5,7 @@ def get_agentx_headers(token: str) -> dict:
     return {
         "Accept-Language": "ru-RU,ru;q=0.9,en-NL;q=0.8,en-US;q=0.7,en;q=0.6",
         "Connection": "keep-alive",
-        "If-None-Match": 'W/"22f5-XZVuj2p07a8yEuO7gaowbXxXptY"',
+        "If-None-Match": 'W/"2ef9-fZ/C6gM+FPcmIYJV+v8NbPFChG0"',
         "Origin": "https://app.agentx.pw",
         "Referer": "https://app.agentx.pw/",
         "Sec-Fetch-Dest": "empty",
