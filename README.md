@@ -1,4 +1,4 @@
-# TonKombat Bot
+# AgentX Bot
 
 [🇷🇺 Russian](README-RU.md) | [🇬🇧 English](README.md)
 
