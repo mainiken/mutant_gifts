@@ -18,7 +18,7 @@ from bot.utils.first_run import check_is_first_run, append_recurring_session
 from bot.config import settings
 from bot.utils import logger, config_utils, CONFIG_PATH
 from bot.exceptions import InvalidSession
-from bot.core.headers import get_agentx_headers
+from bot.core.headers import get_tonminefarm_headers
 
 
 class BaseBot:
@@ -30,6 +30,7 @@ class BaseBot:
         'error': '❌',
         'energy': '⚡',
         'time': '⏰',
+        'miner': '⛏️',
     }
     
     def __init__(self, tg_client: UniversalTelegramClient):
@@ -97,7 +98,7 @@ class BaseBot:
         ))
         return new_url
 
-    async def get_tg_web_data(self, app_name: str = "agntxbot", path: str = "node") -> str:
+    async def get_tg_web_data(self, app_name: str = "TonFarmOfficial_bot", path: str = "app") -> str:
         try:
             webview_url = await self.tg_client.get_app_webview_url(
                 app_name,
@@ -107,16 +108,31 @@ class BaseBot:
             if not webview_url:
                 raise InvalidSession("Failed to get webview URL")
             webview_url = self._replace_webapp_version(webview_url, "9.0")
-            hash_index = webview_url.find('#tgWebAppData=')
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] Original webview_url: {webview_url}")
+            
+            # Ищем tgWebAppData в fragment (после #)
+            hash_index = webview_url.find('#')
             if hash_index == -1:
-                raise InvalidSession("tgWebAppData not found in url")
+                raise InvalidSession("No fragment found in URL")
+            
             url_fragment = webview_url[hash_index:]
-            match = re.search(r'#tgWebAppData=([^&]*)', url_fragment)
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] URL fragment: {url_fragment}")
+            
+            # Ищем tgWebAppData в fragment
+            match = re.search(r'tgWebAppData=([^&]*)', url_fragment)
             if not match:
-                raise InvalidSession("tgWebAppData not found in url fragment")
+                raise InvalidSession("tgWebAppData not found in URL fragment")
+            
             tg_web_data = match.group(1)
             from urllib.parse import unquote
             tg_web_data_decoded = unquote(tg_web_data)
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] Extracted tgWebAppData: {tg_web_data_decoded}")
+            
             return tg_web_data_decoded
         except Exception as e:
             logger.error(f"Error processing URL: {str(e)}")
@@ -134,59 +150,43 @@ class BaseBot:
             return False
 
     async def login(self, tg_web_data: str) -> bool:
-        headers = {
-            "Accept-Language": "ru-RU,ru;q=0.9,en-NL;q=0.8,en-US;q=0.7,en;q=0.6",
-            "Connection": "keep-alive",
-            "If-None-Match": 'W/"22f5-XZVuj2p07a8yEuO7gaowbXxXptY"',
-            "Origin": "https://app.agentx.pw",
-            "Referer": f"https://app.agentx.pw/?tgWebAppStartParam={self.get_ref_id()}",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-            "accept": "application/json",
-            "authorization": f"Bearer {tg_web_data}",
-        }
+        """Авторизация в TonMineFarm через tgWebAppData"""
         try:
+            # Создаем данные для запроса
+            request_data = {
+                "t": "home",
+                "a": "get2",
+                "ref": 0,
+                "pool_id": 0,
+                "initData": tg_web_data,
+                "fp": ""
+            }
+            
+            headers = get_tonminefarm_headers()
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] Login request_data: {request_data}")
+                logger.debug(f"[{self.session_name}] Login headers: {headers}")
+            
             response = await self.make_request(
-                method="GET",
-                url="https://api.agentx.pw/main/init",
-                headers=headers
-            )
-            if response and "user" in response:
-                self._access_token = tg_web_data
-                self._refresh_token = response.get("refreshToken")
-                return True
-            return False
-        except Exception as error:
-            logger.error(f"{self.session_name} | Ошибка авторизации: {str(error)}")
-            return False
-
-    async def refresh_token(self) -> bool:
-        """
-        Обновляет access_token с помощью refresh_token.
-        Возвращает True при успехе, иначе False.
-        """
-        if not self._refresh_token:
-            return False
-        headers = {
-            "accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        try:
-            async with self._http_client.post(
-                "https://api.agentx.pw/auth/refresh",
+                method="POST",
+                url="https://api.tonminefarm.com/request",
                 headers=headers,
-                json={"refreshToken": self._refresh_token}
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    self._access_token = data.get("accessToken")
-                    self._refresh_token = data.get("refreshToken")
-                    return True
+                json=request_data
+            )
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] Login response: {response}")
+            
+            if response and response.get("status") == 200:
+                self._access_token = tg_web_data
+                logger.info(f"{self.session_name} | Авторизация успешна")
+                return True
+            else:
+                logger.error(f"{self.session_name} | Авторизация неуспешна, response: {response}")
                 return False
         except Exception as error:
-            logger.error(f"{self.session_name} | Ошибка обновления токена: {str(error)}")
+            logger.error(f"{self.session_name} | Ошибка авторизации: {str(error)}")
             return False
 
     async def make_request(self, method: str, url: str, **kwargs) -> Optional[Dict]:
@@ -207,18 +207,13 @@ class BaseBot:
                     if response.status == 200:
                         return await response.json()
                     if response.status in (401, 502, 403, 418):
-                        logger.warning(f"[{self.session_name}] Access token expired or server error, пытаюсь refresh...")
-                        refreshed = await self.refresh_token()
-                        if refreshed:
-                            logger.info(f"[{self.session_name}] Access token refreshed, повтор запроса...")
-                            continue
-                        logger.warning(f"[{self.session_name}] Refresh не удался, пробую re-login...")
+                        logger.warning(f"[{self.session_name}] Access token expired or server error, пытаюсь re-login...")
                         tg_web_data = await self.get_tg_web_data()
                         relogin = await self.login(tg_web_data)
                         if relogin:
                             logger.info(f"[{self.session_name}] Re-login успешен, повтор запроса...")
                             continue
-                        logger.error(f"[{self.session_name}] Не удалось refresh/re-login, InvalidSession")
+                        logger.error(f"[{self.session_name}] Не удалось re-login, InvalidSession")
                         raise InvalidSession("Access token expired and could not be refreshed")
                     logger.error(f"[{self.session_name}] Request failed with status {response.status}")
                     return None
@@ -274,80 +269,118 @@ class BaseBot:
                     await asyncio.sleep(sleep_duration)
 
     async def process_bot_logic(self) -> None:
+        """Основная логика бота для TonMineFarm"""
         status = await self._get_status()
-        user = status.get("user", {})
+        
+        if not status or status.get("status") != 200:
+            logger.error(f"{self.session_name} | Не удалось получить статус")
+            await asyncio.sleep(60)
+            return
 
-        # Базовый узел
-        energy = user.get("energy", 0)
-        max_energy = user.get("max_energy", 0)
-        is_node_deployed = user.get("is_node_deployed", False)
-        is_node_started = user.get("is_node_started", False)
-
-        # Pro узел
-        pro_energy = user.get("pro_energy", 0)
-        pro_max_energy = user.get("pro_max_energy", 0)
-        is_pro_deployed = user.get("is_pro_deployed", False)
-        is_pro_started = user.get("is_pro_started", False)
-
-        ENERGY_MIN = 100
+        asics = status.get("asics", [])
         emoji = self.EMOJI
-
-        # Время до полной зарядки (секунды)
-        basic_recovery = None
-        pro_recovery = None
-
-        # Логика для базового узла (x-basic)
-        if is_node_deployed:
-            if energy >= max_energy and not is_node_started:
-                await self._toggle_basic_agent(True)
-                logger.info(f"{self.session_name} {emoji['success']} Basic Agent started | {emoji['energy']}Energy: {energy}/{max_energy}")
-            elif energy < ENERGY_MIN and is_node_started:
-                await self._toggle_basic_agent(False)
-                logger.info(f"{self.session_name} {emoji['error']} Basic Agent stopped | {emoji['energy']}Energy: {energy}/{max_energy}")
-            if energy < max_energy:
-                basic_recovery = int(7200 * (max_energy - energy) / max_energy)
-        else:
-            logger.info(f"{self.session_name} {emoji['warning']} Basic node not deployed")
-
-        # Логика для pro узла (x-pro)
-        if is_pro_deployed:
-            if pro_energy >= pro_max_energy and not is_pro_started:
-                await self._toggle_pro_agent(True)
-                logger.info(f"{self.session_name} {emoji['success']} Pro Agent started | {emoji['energy']}Pro Energy: {pro_energy}/{pro_max_energy}")
-            elif pro_energy < ENERGY_MIN and is_pro_started:
-                await self._toggle_pro_agent(False)
-                logger.info(f"{self.session_name} {emoji['error']} Pro Agent stopped | {emoji['energy']}Pro Energy: {pro_energy}/{pro_max_energy}")
-            if pro_energy < pro_max_energy:
-                pro_recovery = int(7200 * (pro_max_energy - pro_energy) / pro_max_energy)
-        else:
-            logger.info(f"{self.session_name} {emoji['warning']} Pro node not deployed")
-
-        # Формируем строку статуса
-        status_parts = []
-        if is_node_deployed:
-            if basic_recovery is not None:
-                status_parts.append(f"x-basic {int(energy)}/{int(max_energy)} энергии, до перезарядки {basic_recovery} сек.")
+        
+        # Собираем информацию о всех майнерах
+        miners_to_start = []
+        min_sleep_time = 3600  # Максимум 1 час по умолчанию
+        
+        for asic in asics:
+            asic_id = asic.get("id")
+            resource = asic.get("resource", {})
+            unlim = resource.get("unlim", 0)
+            working = resource.get("working", 0)
+            working_time = resource.get("working_time", "")
+            
+            # Пропускаем бесконечные майнеры (unlim = 1)
+            if unlim == 1:
+                logger.info(f"{self.session_name} {emoji['info']} ASIC {asic_id} | Бесконечный майнер, пропускаем")
+                continue
+            
+            # Проверяем время работы
+            if self._should_start_miner(working_time):
+                miners_to_start.append(asic)
+                status_text = "не работает" if not working_time else f"время: {working_time}"
+                logger.info(f"{self.session_name} {emoji['time']} ASIC {asic_id} | Готов к запуску, {status_text}")
             else:
-                status_parts.append(f"x-basic {int(energy)}/{int(max_energy)} энергии, полностью заряжен")
-        else:
-            status_parts.append("x-basic не развернут")
+                # Вычисляем время до следующего запуска
+                time_to_next = self._calculate_time_to_next(working_time)
+                min_sleep_time = min(min_sleep_time, time_to_next)
+                status_text = "не работает" if not working_time else f"время: {working_time}"
+                logger.info(f"{self.session_name} {emoji['miner']} ASIC {asic_id} | {status_text}, до запуска: {time_to_next} сек")
+        
+        # Запускаем майнеры, которые готовы
+        if miners_to_start:
+            for asic in miners_to_start:
+                asic_id = asic.get("id")
+                # Добавляем случайную задержку от 1 до 5 минут
+                delay_minutes = randint(1, 5)
+                logger.info(f"{self.session_name} {emoji['time']} ASIC {asic_id} | Запуск через {delay_minutes} мин")
+                await asyncio.sleep(delay_minutes * 60)
+                
+                # Запускаем майнер на 4 часа
+                success = await self._start_miner_4hours(asic)
+                if success:
+                    logger.info(f"{self.session_name} {emoji['success']} ASIC {asic_id} | Запущен на 4 часа")
+                else:
+                    logger.error(f"{self.session_name} {emoji['error']} ASIC {asic_id} | Ошибка запуска")
+        
+        # Засыпаем на минимальное время до следующей проверки
+        sleep_time = max(min_sleep_time, 60)  # Минимум 1 минута
+        logger.info(f"{self.session_name} | Засыпаем на {sleep_time} сек до следующей проверки")
+        await asyncio.sleep(sleep_time)
 
-        if is_pro_deployed:
-            if pro_recovery is not None:
-                status_parts.append(f"pro {int(pro_energy)}/{int(pro_max_energy)} энергии, до перезарядки {pro_recovery} сек.")
+    def _should_start_miner(self, working_time: str) -> bool:
+        """Проверяет, нужно ли запускать майнер (время >= 04:00:00)"""
+        try:
+            # Если время пустое, майнер не работает - можно запускать
+            if not working_time or working_time.strip() == "":
+                return True
+                
+            # Парсим время в формате "DD:HH:MM:SS" или "HH:MM:SS"
+            parts = working_time.split(":")
+            if len(parts) == 4:  # DD:HH:MM:SS
+                days = int(parts[0])
+                hours = int(parts[1])
+                total_hours = days * 24 + hours
+            elif len(parts) == 3:  # HH:MM:SS
+                total_hours = int(parts[0])
             else:
-                status_parts.append(f"pro {int(pro_energy)}/{int(pro_max_energy)} энергии, полностью заряжен")
-        else:
-            status_parts.append("pro не развернут")
+                return False
+                
+            return total_hours >= 4
+        except (ValueError, IndexError):
+            return False
 
-        # Определяем минимальное время сна
-        sleep_seconds = 60
-        sleep_candidates = [v for v in [basic_recovery, pro_recovery] if v is not None]
-        if sleep_candidates:
-            sleep_seconds = max(min(sleep_candidates), 60)
-
-        logger.info(f"{self.session_name} | {'; '.join(status_parts)}; засыпаем на {sleep_seconds} сек.")
-        await asyncio.sleep(sleep_seconds)
+    def _calculate_time_to_next(self, working_time: str) -> int:
+        """Вычисляет время до следующего запуска в секундах"""
+        try:
+            # Если время пустое, майнер не работает - можно запускать сразу
+            if not working_time or working_time.strip() == "":
+                return 60
+                
+            parts = working_time.split(":")
+            if len(parts) == 4:  # DD:HH:MM:SS
+                days = int(parts[0])
+                hours = int(parts[1])
+                minutes = int(parts[2])
+                seconds = int(parts[3])
+                total_hours = days * 24 + hours
+            elif len(parts) == 3:  # HH:MM:SS
+                total_hours = int(parts[0])
+                minutes = int(parts[1])
+                seconds = int(parts[2])
+            else:
+                return 3600  # По умолчанию 1 час
+            
+            # Если время меньше 4 часов, вычисляем сколько осталось
+            if total_hours < 4:
+                remaining_seconds = (4 - total_hours) * 3600 - minutes * 60 - seconds
+                return max(remaining_seconds, 60)  # Минимум 1 минута
+            else:
+                # Если уже больше 4 часов, запускаем сразу
+                return 60
+        except (ValueError, IndexError):
+            return 3600
 
     async def check_and_update_proxy(self, accounts_config: dict) -> bool:
         if not settings.USE_PROXY:
@@ -369,65 +402,72 @@ class BaseBot:
         return True
 
 
-class EnergyAgentBot(BaseBot):
-    _TOGGLE_BASIC_URL: str = "https://api.agentx.pw/node/toggle?value={value}"
-    _TOGGLE_PRO_URL: str = "https://api.agentx.pw/node/toggle-pro?value={value}"
-    _INIT_URL: str = "https://api.agentx.pw/main/init"
-
-    @property
-    def energy_tick_seconds(self) -> int:
-        return 1
+class TonMineFarmBot(BaseBot):
+    """Бот для работы с TonMineFarm"""
+    
+    _REQUEST_URL: str = "https://api.tonminefarm.com/request"
 
     async def _get_status(self) -> dict:
-        headers = get_agentx_headers(self._access_token or "")
+        """Получает статус аккаунта и майнеров"""
+        headers = get_tonminefarm_headers()
+        request_data = {
+            "t": "home",
+            "a": "get2",
+            "ref": 0,
+            "pool_id": 0,
+            "initData": self._access_token or "",
+            "fp": ""
+        }
+        
         if settings.DEBUG_LOGGING:
             logger.debug(f"[{self.session_name}] _get_status: headers={headers}")
-        async with self._http_client.get(self._INIT_URL, headers=headers) as response:
-            if settings.DEBUG_LOGGING:
-                logger.debug(f"[{self.session_name}] _get_status response.status: {response.status}")
-                try:
-                    logger.debug(f"[{self.session_name}] _get_status response.text: {await response.text()}")
-                except Exception as e:
-                    logger.debug(f"[{self.session_name}] _get_status response.text error: {e}")
-            if response.status == 200:
-                return await response.json()
-            logger.error(f"[{self.session_name}] Ошибка запроса: {response.status}")
-            raise InvalidSession(f"Ошибка запроса: {response.status}")
+            logger.debug(f"[{self.session_name}] _get_status: data={request_data}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=self._REQUEST_URL,
+            headers=headers,
+            json=request_data
+        )
+        
+        if not response:
+            raise InvalidSession("Failed to get status")
+            
+        return response
 
-    async def _toggle_basic_agent(self, value: bool) -> bool:
-        url = self._TOGGLE_BASIC_URL.format(value=str(value).lower())
-        headers = get_agentx_headers(self._access_token or "")
+    async def _start_miner_4hours(self, asic: dict) -> bool:
+        """Запускает майнер на 4 часа"""
+        asic_id = asic.get("id")
+        asic_level = asic.get("level", "1")
+        
+        headers = get_tonminefarm_headers()
+        request_data = {
+            "t": "home",
+            "a": "start_miner",
+            "asic_id": asic_id,
+            "asic_level": asic_level,
+            "initData": self._access_token or "",
+            "fp": "0ead51051b4bf434740bdd0193bfb530"
+        }
+        
         if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _toggle_basic_agent: url={url}, headers={headers}, value={value}")
-        async with self._http_client.post(url, headers=headers, data="") as response:
-            if settings.DEBUG_LOGGING:
-                logger.debug(f"[{self.session_name}] _toggle_basic_agent response.status: {response.status}")
-                try:
-                    logger.debug(f"[{self.session_name}] _toggle_basic_agent response.text: {await response.text()}")
-                except Exception as e:
-                    logger.debug(f"[{self.session_name}] _toggle_basic_agent response.text error: {e}")
-            return response.status == 200
-
-    async def _toggle_pro_agent(self, value: bool) -> bool:
-        url = self._TOGGLE_PRO_URL.format(value=str(value).lower())
-        headers = get_agentx_headers(self._access_token or "")
+            logger.debug(f"[{self.session_name}] _start_miner_4hours: asic_id={asic_id}, data={request_data}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=self._REQUEST_URL,
+            headers=headers,
+            json=request_data
+        )
+        
         if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _toggle_pro_agent: url={url}, headers={headers}, value={value}")
-        async with self._http_client.post(url, headers=headers, data="") as response:
-            if settings.DEBUG_LOGGING:
-                logger.debug(f"[{self.session_name}] _toggle_pro_agent response.status: {response.status}")
-                try:
-                    logger.debug(f"[{self.session_name}] _toggle_pro_agent response.text: {await response.text()}")
-                except Exception as e:
-                    logger.debug(f"[{self.session_name}] _toggle_pro_agent response.text error: {e}")
-            return response.status == 200
+            logger.debug(f"[{self.session_name}] _start_miner_4hours response: {response}")
+            
+        return response and response.get("status") == 200
 
-    # Оставляем старый метод для обратной совместимости
-    async def _toggle_agent(self, value: bool) -> bool:
-        return await self._toggle_basic_agent(value)
 
 async def run_tapper(tg_client: UniversalTelegramClient):
-    bot = EnergyAgentBot(tg_client=tg_client)
+    bot = TonMineFarmBot(tg_client=tg_client)
     try:
         await bot.run()
     except InvalidSession as e:

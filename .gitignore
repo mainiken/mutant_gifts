@@ -1,6 +1,7 @@
 *.log
 *.tmp
 *.db
+*.lock
 
 # Игнорировать файл .env
 .env
