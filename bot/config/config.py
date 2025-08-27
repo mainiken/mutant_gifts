@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     SESSION_START_DELAY: int = 360
 
-    REF_ID: str = '252453226'
+    REF_ID: str = 'r_252453226'
     SESSIONS_PER_PROXY: int = 1
     USE_PROXY: bool = True
     DISABLE_PROXY_REPLACE: bool = False
@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     AUTO_UPDATE: bool = True
     CHECK_UPDATE_INTERVAL: int = 60
     BLACKLISTED_SESSIONS: str = ""
+
+    # Автоматизация Mutant Gifts
+    AUTO_MUTATION: bool = True
+    AUTO_BATTLE: bool = True
+    AUTO_UPGRADE: bool = True
+    MIN_COINS_BALANCE: int = 0
 
     @property
     def blacklisted_sessions(self) -> List[str]:

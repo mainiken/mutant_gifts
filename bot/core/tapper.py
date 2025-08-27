@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import json
 import os
 import re
+from yarl import URL
 
 from bot.utils.universal_telegram_client import UniversalTelegramClient
 from bot.utils.proxy_utils import check_proxy, get_working_proxy
@@ -18,7 +19,7 @@ from bot.utils.first_run import check_is_first_run, append_recurring_session
 from bot.config import settings
 from bot.utils import logger, config_utils, CONFIG_PATH
 from bot.exceptions import InvalidSession
-from bot.core.headers import get_tonminefarm_headers
+
 
 
 class BaseBot:
@@ -48,6 +49,9 @@ class BaseBot:
         
         # Загрузка конфигурации сессии
         session_config = config_utils.get_session_config(self.session_name, CONFIG_PATH)
+        if not isinstance(session_config, dict):
+            logger.warning(f"{self.session_name} | Invalid session config format: {type(session_config).__name__}. Resetting to empty dict.")
+            session_config = {}
         if not all(key in session_config for key in ('api', 'user_agent')):
             logger.critical(f"CHECK accounts_config.json as it might be corrupted")
             exit(-1)
@@ -66,7 +70,7 @@ class BaseBot:
             if remainder < 6:
                 self._current_ref_id = settings.REF_ID
             elif remainder < 8:
-                self._current_ref_id = '252453226'
+                self._current_ref_id = 'r_252453226'
         return self._current_ref_id
     
     def _replace_webapp_version(self, url: str, version: str = "9.0") -> str:
@@ -98,7 +102,7 @@ class BaseBot:
         ))
         return new_url
 
-    async def get_tg_web_data(self, app_name: str = "TonFarmOfficial_bot", path: str = "app") -> str:
+    async def get_tg_web_data(self, app_name: str = "mutant_gifts_bot", path: str = "mutantgifts") -> str:
         try:
             webview_url = await self.tg_client.get_app_webview_url(
                 app_name,
@@ -149,45 +153,7 @@ class BaseBot:
             logger.error(f"{self.session_name} | Session initialization error: {str(e)}")
             return False
 
-    async def login(self, tg_web_data: str) -> bool:
-        """Авторизация в TonMineFarm через tgWebAppData"""
-        try:
-            # Создаем данные для запроса
-            request_data = {
-                "t": "home",
-                "a": "get2",
-                "ref": 0,
-                "pool_id": 0,
-                "initData": tg_web_data,
-                "fp": ""
-            }
-            
-            headers = get_tonminefarm_headers()
-            
-            if settings.DEBUG_LOGGING:
-                logger.debug(f"[{self.session_name}] Login request_data: {request_data}")
-                logger.debug(f"[{self.session_name}] Login headers: {headers}")
-            
-            response = await self.make_request(
-                method="POST",
-                url="https://api.tonminefarm.com/request",
-                headers=headers,
-                json=request_data
-            )
-            
-            if settings.DEBUG_LOGGING:
-                logger.debug(f"[{self.session_name}] Login response: {response}")
-            
-            if response and response.get("status") == 200:
-                self._access_token = tg_web_data
-                logger.info(f"{self.session_name} | Авторизация успешна")
-                return True
-            else:
-                logger.error(f"{self.session_name} | Авторизация неуспешна, response: {response}")
-                return False
-        except Exception as error:
-            logger.error(f"{self.session_name} | Ошибка авторизации: {str(error)}")
-            return False
+    
 
     async def make_request(self, method: str, url: str, **kwargs) -> Optional[Dict]:
         if not self._http_client:
@@ -223,164 +189,9 @@ class BaseBot:
                     logger.debug(f"[{self.session_name}] Exception in make_request: {e}")
                 return None
 
-    async def run(self) -> None:
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] run: start initialize_session")
-        if not await self.initialize_session():
-            logger.error(f"[{self.session_name}] Failed to initialize session")
-            raise InvalidSession("Failed to initialize session")
-        random_delay = uniform(1, settings.SESSION_START_DELAY)
-        logger.info(f"Bot will start in {int(random_delay)}s")
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] Sleeping for {random_delay} seconds before start")
-        await asyncio.sleep(random_delay)
-        proxy_conn = {'connector': ProxyConnector.from_url(self._current_proxy)} if self._current_proxy else {}
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] proxy_conn: {proxy_conn}")
-        async with CloudflareScraper(timeout=aiohttp.ClientTimeout(60), **proxy_conn) as http_client:
-            self._http_client = http_client
-            while True:
-                try:
-                    session_config = config_utils.get_session_config(self.session_name, CONFIG_PATH)
-                    if settings.DEBUG_LOGGING:
-                        logger.debug(f"[{self.session_name}] session_config: {session_config}")
-                    if not await self.check_and_update_proxy(session_config):
-                        logger.warning('Failed to find working proxy. Sleep 5 minutes.')
-                        await asyncio.sleep(300)
-                        continue
+    
 
-                    # Получаем tgWebAppData и логинимся
-                    tg_web_data = await self.get_tg_web_data()
-                    if not await self.login(tg_web_data):
-                        logger.error(f"[{self.session_name}] Login failed")
-                        raise InvalidSession("Login failed")
-
-                    await self.process_bot_logic()
-                except InvalidSession as e:
-                    logger.error(f"[{self.session_name}] InvalidSession: {e}")
-                    if settings.DEBUG_LOGGING:
-                        logger.debug(f"[{self.session_name}] InvalidSession details: {e}")
-                    raise
-                except Exception as error:
-                    sleep_duration = uniform(60, 120)
-                    logger.error(f"[{self.session_name}] Unknown error: {error}. Sleeping for {int(sleep_duration)}")
-                    if settings.DEBUG_LOGGING:
-                        logger.debug(f"[{self.session_name}] Exception details: {error}")
-                    await asyncio.sleep(sleep_duration)
-
-    async def process_bot_logic(self) -> None:
-        """Основная логика бота для TonMineFarm"""
-        status = await self._get_status()
-        
-        if not status or status.get("status") != 200:
-            logger.error(f"{self.session_name} | Не удалось получить статус")
-            await asyncio.sleep(60)
-            return
-
-        asics = status.get("asics", [])
-        emoji = self.EMOJI
-        
-        # Собираем информацию о всех майнерах
-        miners_to_start = []
-        min_sleep_time = 3600  # Максимум 1 час по умолчанию
-        
-        for asic in asics:
-            asic_id = asic.get("id")
-            resource = asic.get("resource", {})
-            unlim = resource.get("unlim", 0)
-            working = resource.get("working", 0)
-            working_time = resource.get("working_time", "")
-            
-            # Пропускаем бесконечные майнеры (unlim = 1)
-            if unlim == 1:
-                logger.info(f"{self.session_name} {emoji['info']} ASIC {asic_id} | Бесконечный майнер, пропускаем")
-                continue
-            
-            # Проверяем время работы
-            if self._should_start_miner(working_time):
-                miners_to_start.append(asic)
-                status_text = "не работает" if not working_time else f"время: {working_time}"
-                logger.info(f"{self.session_name} {emoji['time']} ASIC {asic_id} | Готов к запуску, {status_text}")
-            else:
-                # Вычисляем время до следующего запуска
-                time_to_next = self._calculate_time_to_next(working_time)
-                min_sleep_time = min(min_sleep_time, time_to_next)
-                status_text = "не работает" if not working_time else f"время: {working_time}"
-                logger.info(f"{self.session_name} {emoji['miner']} ASIC {asic_id} | {status_text}, до запуска: {time_to_next} сек")
-        
-        # Запускаем майнеры, которые готовы
-        if miners_to_start:
-            for asic in miners_to_start:
-                asic_id = asic.get("id")
-                # Добавляем случайную задержку от 1 до 5 минут
-                delay_minutes = randint(1, 5)
-                logger.info(f"{self.session_name} {emoji['time']} ASIC {asic_id} | Запуск через {delay_minutes} мин")
-                await asyncio.sleep(delay_minutes * 60)
-                
-                # Запускаем майнер на 4 часа
-                success = await self._start_miner_4hours(asic)
-                if success:
-                    logger.info(f"{self.session_name} {emoji['success']} ASIC {asic_id} | Запущен на 4 часа")
-                else:
-                    logger.error(f"{self.session_name} {emoji['error']} ASIC {asic_id} | Ошибка запуска")
-        
-        # Засыпаем на минимальное время до следующей проверки
-        sleep_time = max(min_sleep_time, 60)  # Минимум 1 минута
-        logger.info(f"{self.session_name} | Засыпаем на {sleep_time} сек до следующей проверки")
-        await asyncio.sleep(sleep_time)
-
-    def _should_start_miner(self, working_time: str) -> bool:
-        """Проверяет, нужно ли запускать майнер (время >= 04:00:00)"""
-        try:
-            # Если время пустое, майнер не работает - можно запускать
-            if not working_time or working_time.strip() == "":
-                return True
-                
-            # Парсим время в формате "DD:HH:MM:SS" или "HH:MM:SS"
-            parts = working_time.split(":")
-            if len(parts) == 4:  # DD:HH:MM:SS
-                days = int(parts[0])
-                hours = int(parts[1])
-                total_hours = days * 24 + hours
-            elif len(parts) == 3:  # HH:MM:SS
-                total_hours = int(parts[0])
-            else:
-                return False
-                
-            return total_hours >= 4
-        except (ValueError, IndexError):
-            return False
-
-    def _calculate_time_to_next(self, working_time: str) -> int:
-        """Вычисляет время до следующего запуска в секундах"""
-        try:
-            # Если время пустое, майнер не работает - можно запускать сразу
-            if not working_time or working_time.strip() == "":
-                return 60
-                
-            parts = working_time.split(":")
-            if len(parts) == 4:  # DD:HH:MM:SS
-                days = int(parts[0])
-                hours = int(parts[1])
-                minutes = int(parts[2])
-                seconds = int(parts[3])
-                total_hours = days * 24 + hours
-            elif len(parts) == 3:  # HH:MM:SS
-                total_hours = int(parts[0])
-                minutes = int(parts[1])
-                seconds = int(parts[2])
-            else:
-                return 3600  # По умолчанию 1 час
-            
-            # Если время меньше 4 часов, вычисляем сколько осталось
-            if total_hours < 4:
-                remaining_seconds = (4 - total_hours) * 3600 - minutes * 60 - seconds
-                return max(remaining_seconds, 60)  # Минимум 1 минута
-            else:
-                # Если уже больше 4 часов, запускаем сразу
-                return 60
-        except (ValueError, IndexError):
-            return 3600
+    
 
     async def check_and_update_proxy(self, accounts_config: dict) -> bool:
         if not settings.USE_PROXY:
@@ -402,72 +213,949 @@ class BaseBot:
         return True
 
 
-class TonMineFarmBot(BaseBot):
-    """Бот для работы с TonMineFarm"""
+class MutantGiftsBot(BaseBot):
+    """Бот для работы с Mutant Gifts"""
     
-    _REQUEST_URL: str = "https://api.tonminefarm.com/request"
-
-    async def _get_status(self) -> dict:
-        """Получает статус аккаунта и майнеров"""
-        headers = get_tonminefarm_headers()
-        request_data = {
-            "t": "home",
-            "a": "get2",
-            "ref": 0,
-            "pool_id": 0,
-            "initData": self._access_token or "",
-            "fp": ""
+    EMOJI = {
+        'info': '🔵',
+        'success': '✅',
+        'warning': '⚠️',
+        'error': '❌',
+        'energy': '⚡',
+        'time': '⏰',
+        'battle': '⚔️',
+        'character': '🎯',
+        'activity': '📋',
+        'leaderboard': '🏆',
+    }
+    
+    def __init__(self, tg_client: UniversalTelegramClient):
+        super().__init__(tg_client)
+        self._jwt_token: Optional[str] = None
+        self._base_url: str = "https://mutant-gifts.xyz"
+        self._session_cookies: Dict[str, str] = {}
+        self._init_data: Optional[str] = None
+        self._ssl_disabled: bool = False
+        
+        # Статистика для отслеживания
+        self._stats = {
+            'unranked_battles': 0,
+            'ranked_battles': 0,
+            'total_coins_earned': 0,
+            'total_gems_earned': 0,
+            'total_rating_earned': 0,
+            'battles_won': 0,
+            'battles_lost': 0
         }
         
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _get_status: headers={headers}")
-            logger.debug(f"[{self.session_name}] _get_status: data={request_data}")
+    def get_mutant_gifts_headers(self) -> Dict[str, str]:
+        """Заголовки для API Mutant Gifts"""
+        from bot.core.headers import get_mutant_gifts_headers
+        return get_mutant_gifts_headers()
+    
+    async def authenticate(self, tg_web_data: str) -> bool:
+        """Авторизация в Mutant Gifts через tgWebAppData для получения JWT токена"""
+        try:
+            # Попробуем получить JWT токен через обмен initData → jwt
+            # Согласно бандлу фронта, используется POST /auth/session с полями
+            # { initData, refCode }
+            headers = self.get_mutant_gifts_headers()
+            # Уточняем браузерные заголовки для корректной установки Set-Cookie
+            headers.setdefault("Referer", "https://mutant-gifts.xyz/")
+            headers.setdefault("Origin", "https://mutant-gifts.xyz")
+            session_payload = {
+                "initData": tg_web_data,
+                "refCode": self.get_ref_id() or ""
+            }
+
+            try:
+                async with self._http_client.post(
+                    f"{self._base_url}/apiv1/auth/session",
+                    headers=headers,
+                    json=session_payload,
+                ) as sess_resp:
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] /apiv1/auth/session status: {sess_resp.status}")
+                    if sess_resp.status in (200, 201):
+                        # Сервер должен проставить jwt в Set-Cookie
+                        resp_cookie = sess_resp.cookies.get('jwt') if sess_resp.cookies else None
+                        if resp_cookie and resp_cookie.value:
+                            self._jwt_token = resp_cookie.value
+                            self._session_cookies['jwt'] = resp_cookie.value
+                    # Проверим cookie_jar клиента на предмет jwt
+                    if not self._jwt_token and hasattr(self._http_client, 'cookie_jar'):
+                        try:
+                            jar_cookies = self._http_client.cookie_jar.filter_cookies(URL(self._base_url))
+                            jar_jwt = jar_cookies.get('jwt') if jar_cookies else None
+                            if jar_jwt and getattr(jar_jwt, 'value', None):
+                                self._jwt_token = jar_jwt.value
+                                self._session_cookies['jwt'] = jar_jwt.value
+                        except Exception as e:
+                            if settings.DEBUG_LOGGING:
+                                logger.debug(f"[{self.session_name}] cookie_jar after /auth/session error: {e}")
+            except Exception as e:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] /auth/session request error: {e}")
+
+            # Если JWT не получили через /auth/session — альтернативно посетим главную
+            query_params = {
+                "tgWebAppStartParam": self.get_ref_id(),
+                "tgWebAppVersion": "9.0",
+                "tgWebAppPlatform": "android",
+                "tgWebAppData": tg_web_data,
+            }
+            auth_url = f"{self._base_url}/?{urlencode(query_params)}"
             
-        response = await self.make_request(
-            method="POST",
-            url=self._REQUEST_URL,
-            headers=headers,
-            json=request_data
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] Visiting auth URL: {auth_url}")
+            
+            # Посещаем страницу для установки cookies
+            # При проблемах SSL можем использовать отключенный SSL при FIX_CERT
+            get_kwargs = {"headers": headers}
+            if settings.FIX_CERT:
+                get_kwargs["ssl"] = False
+            async with self._http_client.get(auth_url, **get_kwargs) as response:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Auth page response status: {response.status}")
+                
+                # Пробуем достать jwt из Set-Cookie заголовков ответа
+                resp_cookie = response.cookies.get('jwt') if response.cookies else None
+                if resp_cookie and resp_cookie.value:
+                    self._jwt_token = resp_cookie.value
+                    self._session_cookies['jwt'] = resp_cookie.value
+                
+            # Если не нашли в самом ответе — пробуем получить из cookie_jar клиента
+            if not self._jwt_token and hasattr(self._http_client, 'cookie_jar'):
+                try:
+                    jar_cookies = self._http_client.cookie_jar.filter_cookies(URL(self._base_url))
+                    jar_jwt = jar_cookies.get('jwt') if jar_cookies else None
+                    if jar_jwt and getattr(jar_jwt, 'value', None):
+                        self._jwt_token = jar_jwt.value
+                        self._session_cookies['jwt'] = jar_jwt.value
+                except Exception as e:
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] cookie_jar error: {e}")
+
+            # Дополнительная попытка: дернуть профиль с init data в заголовке,
+            # некоторые приложения аутентифицируют по нему
+            if not self._jwt_token:
+                init_header_candidates = [
+                    "X-Telegram-Init-Data",
+                    "X-Init-Data",
+                    "X-Telegram-Auth",
+                ]
+                for header_name in init_header_candidates:
+                    try:
+                        headers_with_init = {**headers, header_name: tg_web_data}
+                        if settings.DEBUG_LOGGING:
+                            logger.debug(
+                                f"[{self.session_name}] Try auth via header {header_name}"
+                            )
+                        prof_kwargs = {"headers": headers_with_init}
+                        if settings.FIX_CERT:
+                            prof_kwargs["ssl"] = False
+                        async with self._http_client.get(
+                            f"{self._base_url}/apiv1/profile", **prof_kwargs
+                        ) as prof_resp:
+                            if settings.DEBUG_LOGGING:
+                                logger.debug(
+                                    f"[{self.session_name}] profile(status={prof_resp.status}) via {header_name}"
+                                )
+                            if prof_resp.status == 200:
+                                self._init_data = tg_web_data
+                                # Сохраняем, какой именно заголовок работает
+                                self._session_cookies["__init_header_name"] = header_name
+                                logger.info(f"{self.session_name} | Авторизация через {header_name}")
+                                return True
+                            resp_cookie = (
+                                prof_resp.cookies.get('jwt') if prof_resp.cookies else None
+                            )
+                            if resp_cookie and resp_cookie.value:
+                                self._jwt_token = resp_cookie.value
+                                self._session_cookies['jwt'] = resp_cookie.value
+                                break
+                        # Проверяем cookie_jar после запроса профиля
+                        if not self._jwt_token and hasattr(self._http_client, 'cookie_jar'):
+                            jar_cookies = self._http_client.cookie_jar.filter_cookies(URL(self._base_url))
+                            jar_jwt = jar_cookies.get('jwt') if jar_cookies else None
+                            if jar_jwt and getattr(jar_jwt, 'value', None):
+                                self._jwt_token = jar_jwt.value
+                                self._session_cookies['jwt'] = jar_jwt.value
+                                break
+                    except Exception as e:
+                        if settings.DEBUG_LOGGING:
+                            logger.debug(
+                                f"[{self.session_name}] header auth attempt failed: {header_name}: {e}"
+                            )
+            
+            # Если ни JWT, ни успешной авторизации через init data — ошибка
+            if not self._jwt_token and not self._init_data:
+                logger.error(f"{self.session_name} | Не удалось аутентифицироваться")
+                return False
+            
+            logger.info(f"{self.session_name} | JWT токен установлен: {self._jwt_token[:20]}...")
+            
+            # Теперь пробуем получить профиль с JWT токеном
+            profile_response = await self.make_mutant_request(
+                method="GET",
+                url=f"{self._base_url}/apiv1/profile"
+            )
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] Profile response: {profile_response}")
+            
+            if profile_response:
+                logger.info(f"{self.session_name} | Авторизация в Mutant Gifts успешна")
+                return True
+            else:
+                logger.error(f"{self.session_name} | Не удалось получить профиль, response: {profile_response}")
+                return False
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка авторизации в Mutant Gifts: {str(error)}")
+            return False
+    
+    async def make_mutant_request(self, method: str, url: str, **kwargs) -> Optional[Dict]:
+        """Выполнение запросов к API Mutant Gifts с JWT токеном"""
+        if not self._http_client:
+            logger.error(f"[{self.session_name}] HTTP client not initialized")
+            raise InvalidSession("HTTP client not initialized")
+        
+        # Объединяем cookies: переданные в kwargs + сессионные
+        cookies = kwargs.get('cookies', {}).copy()
+        if self._jwt_token:
+            cookies.update(self._session_cookies)
+        if cookies:
+            kwargs['cookies'] = cookies
+
+        # Если используем init_data аутентификацию — добавим заголовок
+        headers = kwargs.get('headers', {}).copy()
+        if self._init_data and "authorization" not in {k.lower() for k in headers}:
+            header_name = self._session_cookies.get("__init_header_name", "X-Telegram-Init-Data")
+            headers[header_name] = self._init_data
+            kwargs['headers'] = headers
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] make_mutant_request: method={method}, url={url}, kwargs={kwargs}")
+        
+        for attempt in range(2):
+            try:
+                async with getattr(self._http_client, method.lower())(url, **kwargs) as response:
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] response.status: {response.status}")
+                        try:
+                            response_text = await response.text()
+                            logger.debug(f"[{self.session_name}] response.text: {response_text}")
+                        except Exception as e:
+                            logger.debug(f"[{self.session_name}] response.text error: {e}")
+                    
+                    if response.status in [200, 201]:  # 201 - Created, тоже успешный статус
+                        try:
+                            return await response.json()
+                        except Exception as e:
+                            logger.error(f"[{self.session_name}] Failed to parse JSON response: {e}")
+                            return None
+                    
+                    if response.status in (401, 403):
+                        logger.warning(f"[{self.session_name}] JWT токен истек, пытаюсь re-authenticate...")
+                        tg_web_data = await self.get_tg_web_data()
+                        reauth = await self.authenticate(tg_web_data)
+                        if reauth:
+                            logger.info(f"[{self.session_name}] Re-authenticate успешен, повтор запроса...")
+                            continue
+                        logger.error(f"[{self.session_name}] Не удалось re-authenticate, InvalidSession")
+                        raise InvalidSession("JWT token expired and could not be refreshed")
+                    
+                    logger.error(f"[{self.session_name}] Request failed with status {response.status}")
+                    return None
+                    
+            except Exception as e:
+                logger.error(f"[{self.session_name}] Request error: {str(e)}")
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Exception in make_mutant_request: {e}")
+                return None
+    
+    async def get_profile(self) -> Optional[Dict]:
+        """Получение профиля пользователя"""
+        try:
+            response = await self.make_mutant_request(
+                method="GET",
+                url=f"{self._base_url}/apiv1/profile"
+            )
+            
+            if response and response.get("id"):
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | {self.EMOJI['info']} Профиль получен успешно")
+                return response
+            else:
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить профиль, response: {response}")
+                return None
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения профиля: {str(error)}")
+            return None
+    
+    async def mutate_gems(self) -> Optional[Dict]:
+        """Получение персонажа через мутацию за стартовые гемы"""
+        try:
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/mutations/gems",
+                json=None
+            )
+            if response and response.get("id"):
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Получен персонаж мутацией: {response.get('name')}")
+                return response
+            logger.error(f"{self.session_name} | Не удалось выполнить мутацию, response: {response}")
+            return None
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка мутации: {str(error)}")
+            return None
+
+    async def get_mutations_info(self) -> Optional[Dict]:
+        """Получение информации о доступных мутациях"""
+        try:
+            response = await self.make_mutant_request(
+                method="GET",
+                url=f"{self._base_url}/apiv1/mutations"
+            )
+            if response is not None:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Данные по мутациям получены")
+                return response
+            logger.error(f"{self.session_name} | Не удалось получить данные по мутациям")
+            return None
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения данных по мутациям: {str(error)}")
+            return None
+
+    async def level_up_character(self, character_id: str) -> bool:
+        """Улучшение уровня персонажа"""
+        try:
+            payload = {"id": character_id}
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/characters/{character_id}/level_up",
+                json=payload
+            )
+            if response and response.get("success") is True:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Персонаж {character_id} улучшен")
+                return True
+            logger.error(f"{self.session_name} | Не удалось улучшить персонажа {character_id}, response: {response}")
+            return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка улучшения персонажа {character_id}: {str(error)}")
+            return False
+
+    async def perform_first_run_tutorial(self) -> None:
+        """Прохождение первичного обучения при первом запуске сессии.
+        Шаги:
+        1) POST /apiv1/mutations/gems — получить стартового персонажа
+        2) GET  /apiv1/profile — проверить обновление профиля
+        3) GET  /apiv1/mutations — получить информацию о мутациях
+        4) GET  /apiv1/characters — получить список персонажей
+        5) POST /apiv1/characters/{id}/level_up — улучшить полученного персонажа
+        6) GET  /apiv1/profile — убедиться в применении изменений
+        """
+        try:
+            logger.info(f"{self.session_name} | {self.EMOJI['info']} Первый запуск: прохождение обучения")
+
+            new_character: Optional[Dict] = await self.mutate_gems()
+            await asyncio.sleep(1)
+
+            await self.get_profile()
+            await asyncio.sleep(1)
+
+            await self.get_mutations_info()
+            await asyncio.sleep(1)
+
+            characters = await self.get_characters()
+            await asyncio.sleep(1)
+
+            character_to_level_id: Optional[str] = None
+            if new_character and new_character.get("id"):
+                character_to_level_id = new_character["id"]
+            elif characters:
+                pinned_sorted = sorted(
+                    [c for c in characters if c.get("pin_index") is not None],
+                    key=lambda c: c.get("pin_index", 0)
+                )
+                if pinned_sorted:
+                    character_to_level_id = pinned_sorted[-1]["id"]
+                else:
+                    character_to_level_id = characters[0]["id"]
+
+            if character_to_level_id:
+                await self.level_up_character(character_to_level_id)
+                await asyncio.sleep(1)
+
+            await self.get_profile()
+            logger.info(f"{self.session_name} | {self.EMOJI['success']} Обучение завершено")
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка при прохождении обучения: {str(error)}")
+
+    async def get_characters(self) -> Optional[List[Dict]]:
+        """Получение списка персонажей пользователя"""
+        try:
+            response = await self.make_mutant_request(
+                method="GET",
+                url=f"{self._base_url}/apiv1/characters"
+            )
+            
+            if response and "characters" in response:
+                characters = response["characters"]
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | {self.EMOJI['character']} Получено {len(characters)} персонажей")
+                return characters
+            else:
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить персонажей, response: {response}")
+                return None
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения персонажей: {str(error)}")
+            return None
+    
+    async def get_battles_history(self) -> Optional[List[Dict]]:
+        """Получение истории боев"""
+        try:
+            response = await self.make_mutant_request(
+                method="GET",
+                url=f"{self._base_url}/apiv1/battles"
+            )
+            
+            if response and "battles" in response:
+                battles = response["battles"]
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | {self.EMOJI['battle']} Получено {len(battles)} боев в истории")
+                return battles
+            else:
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить историю боев, response: {response}")
+                return None
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения истории боев: {str(error)}")
+            return None
+    
+    def select_best_characters(self, characters: List[Dict], count: int = 3) -> List[str]:
+        """Выбор лучших персонажей для боя"""
+        if not characters:
+            return []
+        
+        # Сначала выбираем закрепленных персонажей (pinned)
+        pinned_characters = [char for char in characters if char.get('pin_index') is not None]
+        
+        if pinned_characters:
+            # Сортируем закрепленных персонажей по pin_index
+            pinned_characters.sort(key=lambda char: char.get('pin_index', 0))
+            selected = pinned_characters[:count]
+            character_ids = [char['id'] for char in selected]
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | {self.EMOJI['character']} Выбраны закрепленные персонажи: {[char.get('name', 'Unknown') for char in selected]}")
+            return character_ids
+        
+        # Если нет закрепленных персонажей, выбираем лучших по характеристикам
+        sorted_characters = sorted(
+            characters,
+            key=lambda char: (
+                char.get('level', 1),
+                self._get_rarity_value(char.get('rarity', 'Common')),
+                char.get('attack_damage', 0) + char.get('hp', 0)
+            ),
+            reverse=True
         )
         
-        if not response:
-            raise InvalidSession("Failed to get status")
-            
-        return response
-
-    async def _start_miner_4hours(self, asic: dict) -> bool:
-        """Запускает майнер на 4 часа"""
-        asic_id = asic.get("id")
-        asic_level = asic.get("level", "1")
+        # Берем первых count персонажей
+        selected = sorted_characters[:count]
+        character_ids = [char['id'] for char in selected]
         
-        headers = get_tonminefarm_headers()
-        request_data = {
-            "t": "home",
-            "a": "start_miner",
-            "asic_id": asic_id,
-            "asic_level": asic_level,
-            "initData": self._access_token or "",
-            "fp": "0ead51051b4bf434740bdd0193bfb530"
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"{self.session_name} | {self.EMOJI['character']} Выбраны персонажи для боя: {[char.get('name', 'Unknown') for char in selected]}")
+        return character_ids
+    
+    def _get_rarity_value(self, rarity: str) -> int:
+        """Получение числового значения редкости персонажа"""
+        rarity_values = {
+            'Common': 1,
+            'Uncommon': 2,
+            'Rare': 3,
+            'Epic': 4,
+            'Legendary': 5
+        }
+        return rarity_values.get(rarity, 1)
+
+    def _get_rarity_rank(self, rarity: str) -> int:
+        ranking = {
+            'Legendary': 5,
+            'Epic': 4,
+            'Rare': 3,
+            'Uncommon': 2,
+            'Common': 1
+        }
+        return ranking.get(rarity, 1)
+
+    def _sort_by_rarity_priority(self, characters: List[Dict]) -> List[Dict]:
+        safe_chars = [c for c in characters if isinstance(c, dict)]
+        return sorted(
+            safe_chars,
+            key=lambda c: (
+                self._get_rarity_rank(c.get('rarity', 'Common')),
+                c.get('level', 1),
+                c.get('attack_damage', 0) + c.get('hp', 0),
+            ),
+            reverse=True
+        )
+
+    def _get_mutation_gems_price(self, profile: Optional[Dict]) -> int:
+        if not isinstance(profile, dict):
+            return 0
+        mutation_price = profile.get('mutation_price', {})
+        if isinstance(mutation_price, dict):
+            gems_price = mutation_price.get('gems')
+            if isinstance(gems_price, int):
+                return gems_price
+            try:
+                return int(gems_price)
+            except Exception:
+                return 0
+        return 0
+
+    async def change_pin(self, character_id: str, pin_index: Optional[int]) -> bool:
+        try:
+            payload: Dict[str, Any] = {"id": character_id, "pin_index": pin_index}
+            headers = self.get_mutant_gifts_headers()
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/characters/{character_id}/change_pin",
+                json=payload,
+                headers=headers
+            )
+            if response and response.get("success") is True:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Персонаж {character_id} закреплен как {pin_index}")
+                return True
+            logger.error(f"{self.session_name} | Не удалось закрепить персонажа {character_id}, response: {response}")
+            return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка закрепления персонажа {character_id}: {str(error)}")
+            return False
+
+    async def ensure_best_pins(self, characters: List[Dict]) -> List[str]:
+        safe_chars = [c for c in characters if isinstance(c, dict)]
+        desired = self._sort_by_rarity_priority([c for c in safe_chars if c])[:3]
+        desired_ids = [c['id'] for c in desired]
+
+        # Текущие пины
+        current_pins = {c['id']: c.get('pin_index') for c in characters if c.get('pin_index') is not None}
+
+        # Назначаем пины 0,1,2 в порядке убывания приоритета
+        for idx, character in enumerate(desired):
+            current_idx = character.get('pin_index')
+            if current_idx != idx:
+                await self.change_pin(character['id'], idx)
+
+        # Остальные сняем с пинов
+        for character in safe_chars:
+            if character['id'] not in desired_ids and character.get('pin_index') is not None:
+                await self.change_pin(character['id'], None)
+
+        return desired_ids
+
+    async def auto_upgrade_pinned(self, characters: List[Dict], coins: int) -> Tuple[int, List[Dict]]:
+        if not settings.AUTO_UPGRADE:
+            return coins, characters
+        updated_characters = characters
+        current_coins = coins
+        pinned = [c for c in characters if isinstance(c, dict) and c.get('pin_index') is not None]
+        # Сортируем пины по индексу 0..2
+        pinned.sort(key=lambda c: c.get('pin_index', 0))
+
+        for char in pinned:
+            next_level = char.get('next_level') or {}
+            cost = next_level.get('cost') or 0
+            while cost and (current_coins - cost) >= settings.MIN_COINS_BALANCE:
+                ok = await self.level_up_character(char['id'])
+                if not ok:
+                    break
+                current_coins -= cost
+                await asyncio.sleep(0.5)
+                # Обновляем персонажа из свежего списка
+                updated_characters = await self.get_characters() or updated_characters
+                char = next((c for c in updated_characters if isinstance(c, dict) and c.get('id') == char.get('id')), char)
+                next_level = char.get('next_level') or {}
+                cost = next_level.get('cost') or 0
+
+        return current_coins, (updated_characters or characters)
+    
+    async def start_battle(self, character_ids: List[str], battle_type: str = "Unranked") -> Optional[Dict]:
+        """Запуск боя с выбранными персонажами"""
+        try:
+            battle_data = {
+                "battle": {
+                    "character_ids": character_ids,
+                    "battle_type": battle_type
+                }
+            }
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | Battle data: {battle_data}")
+            
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/battles",
+                json=battle_data
+            )
+            
+            if response:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | {self.EMOJI['battle']} Бой {battle_type} запущен успешно")
+                return response
+            else:
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось запустить бой {battle_type}")
+                return None
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка запуска боя {battle_type}: {str(error)}")
+            return None
+    
+    def analyze_battle_result(self, battle_logs: List[Dict]) -> Dict:
+        """Анализ результатов боя"""
+        if not battle_logs:
+            return {}
+        
+        analysis = {
+            'total_actions': len(battle_logs),
+            'attacks': 0,
+            'heals': 0,
+            'critical_hits': 0,
+            'blocks': 0,
+            'rage_activations': 0
         }
         
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _start_miner_4hours: asic_id={asic_id}, data={request_data}")
+        for log in battle_logs:
+            action = log.get('action', '')
             
-        response = await self.make_request(
-            method="POST",
-            url=self._REQUEST_URL,
-            headers=headers,
-            json=request_data
+            if action == 'attack':
+                analysis['attacks'] += 1
+                if log.get('critical', False):
+                    analysis['critical_hits'] += 1
+            elif action == 'cast_heal':
+                analysis['heals'] += 1
+            elif action == 'block_damage':
+                analysis['blocks'] += 1
+            elif action == 'rage_increased':
+                analysis['rage_activations'] += 1
+        
+        return analysis
+    
+    async def process_battles(self, characters: List[Dict], battle_type: str, energy: int) -> None:
+        """Обработка боев для определенного типа"""
+        logger.info(f"{self.session_name} | {self.EMOJI['battle']} {battle_type} бои: {energy} энергии")
+        
+        # Выбираем лучших персонажей
+        character_ids = self.select_best_characters(characters, 3)
+        if not character_ids:
+            logger.error(f"{self.session_name} | {self.EMOJI['error']} Нет персонажей для боя")
+            return
+        
+        # Запускаем бои пока есть энергия
+        battles_fought = 0
+        logger.info(f"{self.session_name} | {self.EMOJI['battle']} Начинаем {battle_type} бои. Энергии: {energy}")
+        
+        while energy > 0:  # Убираем ограничение, бьемся пока есть энергия
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | Запуск {battle_type} боя #{battles_fought + 1}")
+            
+            battle_result = await self.start_battle(character_ids, battle_type)
+            if battle_result:
+                battles_fought += 1
+                energy -= 1
+                logger.info(f"{self.session_name} | {self.EMOJI['battle']} Бой #{battles_fought} завершен. Осталось энергии: {energy}")
+                
+                # Обновляем статистику
+                if battle_type == "Unranked":
+                    self._stats['unranked_battles'] += 1
+                else:
+                    self._stats['ranked_battles'] += 1
+                
+                # Проверяем результат боя
+                if battle_result.get('is_won', False):
+                    self._stats['battles_won'] += 1
+                else:
+                    self._stats['battles_lost'] += 1
+                
+                # Анализируем результаты боя
+                if 'logs' in battle_result:
+                    analysis = self.analyze_battle_result(battle_result['logs'])
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"{self.session_name} | Результаты боя: {analysis}")
+                
+                # Случайная задержка между боями 5–36 секунд
+                await asyncio.sleep(uniform(5, 36))
+            else:
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось запустить бой, прерываем")
+                break
+        
+        if battles_fought > 0:
+            logger.info(f"{self.session_name} | {self.EMOJI['success']} Завершено {battles_fought} {battle_type} боев")
+        else:
+            logger.info(f"{self.session_name} | {self.EMOJI['warning']} Не удалось провести ни одного {battle_type} боя")
+    
+    def print_session_stats(self, sleep_duration: int) -> None:
+        """Вывод статистики сессии перед сном"""
+        total_battles = self._stats['unranked_battles'] + self._stats['ranked_battles']
+        
+        if total_battles > 0:
+            logger.info(f"{self.session_name} | {'='*50}")
+            logger.info(f"{self.session_name} | 📊 СТАТИСТИКА СЕССИИ:")
+            logger.info(f"{self.session_name} | {'='*50}")
+            logger.info(f"{self.session_name} | {self.EMOJI['battle']} Всего боев: {total_battles}")
+            logger.info(f"{self.session_name} |   ├─ Обычные бои: {self._stats['unranked_battles']}")
+            logger.info(f"{self.session_name} |   └─ Рейтинговые бои: {self._stats['ranked_battles']}")
+            logger.info(f"{self.session_name} | 🏆 Победы: {self._stats['battles_won']} | Поражения: {self._stats['battles_lost']}")
+            logger.info(f"{self.session_name} | 💰 Монеты заработано: {self._stats['total_coins_earned']}")
+            logger.info(f"{self.session_name} | 💎 Камни заработано: {self._stats['total_gems_earned']}")
+            logger.info(f"{self.session_name} | ⭐ Рейтинг заработано: {self._stats['total_rating_earned']}")
+            logger.info(f"{self.session_name} | {'='*50}")
+        
+        # Показываем время сна в читаемом формате
+        hours = sleep_duration // 3600
+        minutes = (sleep_duration % 3600) // 60
+        seconds = sleep_duration % 60
+        
+        if hours > 0:
+            time_str = f"{hours}ч {minutes}м {seconds}с"
+        elif minutes > 0:
+            time_str = f"{minutes}м {seconds}с"
+        else:
+            time_str = f"{seconds}с"
+        
+        logger.info(f"{self.session_name} | {self.EMOJI['time']} Ближайшее событие: сон на {time_str}")
+        logger.info(f"{self.session_name} | {'='*50}")
+    
+    def calculate_sleep_duration(self, unranked_energy: int, ranked_energy: int, 
+                                next_unranked_energy_at: int, next_ranked_energy_at: int) -> int:
+        """Ждем до полного заряда энергии.
+        - Обычные бои: максимум 12, +1 каждые 2 часа.
+        - Рейтинговые бои: максимум 6, +1 каждые 3 часа.
+        Возвращаем время до момента, когда ХОТЯ БЫ один тип энергии станет ПОЛНЫМ.
+        Используем точные timestamp ближайшего тика, если они есть; иначе считаем по интервалам."""
+        import datetime
+
+        now_ts = int(datetime.datetime.now().timestamp())
+
+        def time_to_full(current_energy: int, next_at: int, max_energy: int, interval_sec: int) -> int:
+            if current_energy >= max_energy:
+                return 0
+            missing = max_energy - current_energy
+            # Время до ближайшего тика
+            if next_at and next_at > now_ts:
+                first_tick = next_at - now_ts
+            else:
+                first_tick = interval_sec
+            # Остальные тики
+            remaining_ticks_time = max(0, missing - 1) * interval_sec
+            return first_tick + remaining_ticks_time
+
+        unranked_ttf = time_to_full(unranked_energy, next_unranked_energy_at, 12, 2 * 3600)
+        ranked_ttf = time_to_full(ranked_energy, next_ranked_energy_at, 6, 3 * 3600)
+
+        # Если какой-то тип уже полный — просыпаемся быстро
+        if unranked_ttf == 0 or ranked_ttf == 0:
+            return 180
+
+        # Ждем до ближайшего полного заряда одного из типов
+        sleep_time = min(unranked_ttf, ranked_ttf) + 30  # небольшой буфер
+        return max(60, sleep_time)
+    
+    async def login(self, tg_web_data: str) -> bool:
+        """Авторизация в Mutant Gifts (переопределяем метод BaseBot)"""
+        return await self.authenticate(tg_web_data)
+    
+    async def run(self) -> None:
+        """Основной цикл работы Mutant Gifts бота"""
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] run: start initialize_session")
+        if not await self.initialize_session():
+            logger.error(f"[{self.session_name}] Failed to initialize session")
+            raise InvalidSession("Failed to initialize session")
+        
+        random_delay = uniform(1, settings.SESSION_START_DELAY)
+        logger.info(f"Bot will start in {int(random_delay)}s")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] Sleeping for {random_delay} seconds before start")
+        await asyncio.sleep(random_delay)
+        
+        # Настраиваем коннектор с учетом FIX_CERT
+        proxy_conn: Dict[str, Any]
+        if self._current_proxy:
+            proxy_conn = {'connector': ProxyConnector.from_url(self._current_proxy)}
+        else:
+            proxy_conn = {}
+            if settings.FIX_CERT:
+                proxy_conn['connector'] = aiohttp.TCPConnector(ssl=False)
+                self._ssl_disabled = True
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] proxy_conn: {proxy_conn}")
+        
+        async with CloudflareScraper(timeout=aiohttp.ClientTimeout(60), **proxy_conn) as http_client:
+            self._http_client = http_client
+            while True:
+                try:
+                    session_config = config_utils.get_session_config(self.session_name, CONFIG_PATH)
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] session_config: {session_config}")
+
+                    # Для подбора рабочего прокси нужен полный конфиг аккаунтов (а не конфиг одной сессии)
+                    try:
+                        full_accounts_config = config_utils.read_config_file(CONFIG_PATH)
+                    except Exception:
+                        full_accounts_config = {}
+                    
+                    if not await self.check_and_update_proxy(full_accounts_config):
+                        logger.warning('Failed to find working proxy. Sleep 5 minutes.')
+                        await asyncio.sleep(300)
+                        continue
+
+                    # Получаем tgWebAppData и авторизуемся
+                    tg_web_data = await self.get_tg_web_data()
+                    if not await self.authenticate(tg_web_data):
+                        logger.error(f"[{self.session_name}] Authentication failed")
+                        raise InvalidSession("Authentication failed")
+
+                    # Проходим обучение при первом запуске
+                    if self._is_first_run:
+                        await self.perform_first_run_tutorial()
+
+                    # Запускаем основную логику Mutant Gifts
+                    await self.process_mutant_gifts_logic()
+                    
+                except InvalidSession as e:
+                    logger.error(f"[{self.session_name}] InvalidSession: {e}")
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] InvalidSession details: {e}")
+                    raise
+                except Exception as error:
+                    sleep_duration = uniform(60, 120)
+                    logger.error(f"[{self.session_name}] Unknown error: {error}. Sleeping for {int(sleep_duration)}")
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] Exception details: {error}")
+                    await asyncio.sleep(sleep_duration)
+    
+    async def process_mutant_gifts_logic(self) -> None:
+        """Основная логика бота для Mutant Gifts"""
+        # Получаем профиль пользователя
+        profile = await self.get_profile()
+        
+        if not profile or not isinstance(profile, dict):
+            logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить профиль")
+            await asyncio.sleep(60)
+            return
+        
+        # Извлекаем данные профиля
+        username = profile.get('username', 'Unknown')
+        unranked_energy = profile.get('unranked_energy', 0)
+        ranked_energy = profile.get('ranked_energy', 0)
+        coins = profile.get('coins', 0)
+        gems = profile.get('gems', 0)
+        next_unranked_energy_at = profile.get('next_unranked_energy_at')
+        next_ranked_energy_at = profile.get('next_ranked_energy_at')
+        
+        # Выводим компактную информацию о профиле
+        logger.info(f"{self.session_name} | {self.EMOJI['character']} {username} | {self.EMOJI['energy']} {unranked_energy}/{ranked_energy} | 💰 {coins} | 💎 {gems}")
+        
+        # Получаем персонажей
+        characters = await self.get_characters()
+        if not characters:
+            logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить персонажей")
+            await asyncio.sleep(60)
+            return
+        if not isinstance(characters, list):
+            logger.error(f"{self.session_name} | {self.EMOJI['error']} Некорректный формат персонажей: {type(characters).__name__}")
+            await asyncio.sleep(60)
+            return
+        
+        # Авто-мутация: пока хватает гемов и включено
+        mutation_price_gems = self._get_mutation_gems_price(profile)
+        if settings.AUTO_MUTATION and isinstance(gems, int) and gems >= max(1, mutation_price_gems or 100):
+            while True:
+                mutation_price = self._get_mutation_gems_price(profile) or 100
+                if not isinstance(gems, int) or gems < mutation_price:
+                    break
+                new_char = await self.mutate_gems()
+                if not new_char:
+                    break
+                gems -= mutation_price
+                characters = await self.get_characters() or characters
+                # Проверим, входит ли карта в топ-3 по приоритету редкости — если да, перепинним
+                top_ids = [c['id'] for c in self._sort_by_rarity_priority(characters)[:3] if isinstance(c, dict) and 'id' in c]
+                if isinstance(new_char, dict) and new_char.get('id') in top_ids:
+                    await self.ensure_best_pins(characters)
+                await asyncio.sleep(1)
+
+        # Обеспечиваем правильные пины по приоритету редкости
+        selected_ids = await self.ensure_best_pins(characters)
+        characters = await self.get_characters() or characters
+
+        # Авто-улучшение: только закрепленных карт, при балансе выше MIN_COINS_BALANCE
+        if settings.AUTO_UPGRADE:
+            coins, characters = await self.auto_upgrade_pinned(characters, coins)
+
+        # Получаем историю боев
+        battles_history = await self.get_battles_history()
+        if battles_history:
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | Получена история боев: {len(battles_history)} боев")
+        
+        # Обрабатываем бои если включено AUTO_BATTLE
+        if settings.AUTO_BATTLE:
+            if unranked_energy > 0:
+                await self.process_battles(characters, "Unranked", unranked_energy)
+            if ranked_energy > 0:
+                await self.process_battles(characters, "Ranked", ranked_energy)
+        
+        # Получаем обновленный профиль после боев
+        updated_profile = await self.get_profile()
+        if updated_profile:
+            unranked_energy = updated_profile.get('unranked_energy', 0)
+            ranked_energy = updated_profile.get('ranked_energy', 0)
+            next_unranked_energy_at = updated_profile.get('next_unranked_energy_at')
+            next_ranked_energy_at = updated_profile.get('next_ranked_energy_at')
+            logger.info(f"{self.session_name} | {self.EMOJI['info']} Обновленный профиль: обычная энергия {unranked_energy}, рейтинговая энергия {ranked_energy}")
+        else:
+            logger.warning(f"{self.session_name} | {self.EMOJI['warning']} Не удалось получить обновленный профиль")
+        
+        # Логируем состояние энергии после боев
+        logger.info(f"{self.session_name} | {self.EMOJI['info']} Состояние после боев: обычная энергия {unranked_energy}, рейтинговая энергия {ranked_energy}")
+        
+        # Рассчитываем время сна на основе данных профиля
+        # Преобразуем строки в int для timestamp
+        next_unranked_timestamp = int(next_unranked_energy_at) if next_unranked_energy_at else 0
+        next_ranked_timestamp = int(next_ranked_energy_at) if next_ranked_energy_at else 0
+        
+        sleep_duration = self.calculate_sleep_duration(
+            unranked_energy, ranked_energy, 
+            next_unranked_timestamp, next_ranked_timestamp
         )
         
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _start_miner_4hours response: {response}")
-            
-        return response and response.get("status") == 200
+        # Выводим статистику и ждем до восстановления энергии
+        self.print_session_stats(sleep_duration)
+        
+        # Краткая информация о состоянии энергии
+        if unranked_energy == 0 and ranked_energy == 0:
+            logger.info(f"{self.session_name} | {self.EMOJI['info']} Нет энергии")
+        else:
+            logger.info(f"{self.session_name} | {self.EMOJI['info']} Энергия: {unranked_energy}/{ranked_energy}")
+        
+        await asyncio.sleep(sleep_duration)
+
 
 
 async def run_tapper(tg_client: UniversalTelegramClient):
-    bot = TonMineFarmBot(tg_client=tg_client)
+    # Запускаем MutantGiftsBot
+    bot = MutantGiftsBot(tg_client=tg_client)
     try:
         await bot.run()
     except InvalidSession as e:

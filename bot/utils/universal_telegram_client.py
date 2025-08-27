@@ -36,11 +36,11 @@ class UniversalTelegramClient:
         self.is_pyrogram: bool = False
         self._client_params = client_params
         self._init_client()
-        self.default_val = '252453226'
+        self.default_val = 'r_252453226'
         self.lock = AsyncInterProcessLock(
             os.path.join(os.path.dirname(CONFIG_PATH), 'lock_files', f"{self.session_name}.lock"))
         self._webview_data = None
-        self.ref_id = settings.REF_ID if randint(1, 100) <= 70 else '252453226'
+        self.ref_id = settings.REF_ID if randint(1, 100) <= 70 else 'r_252453226'
 
     def _init_client(self):
         try:

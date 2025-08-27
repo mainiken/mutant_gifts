@@ -17,18 +17,18 @@ def get_agentx_headers(token: str) -> dict:
     }
 
 
-def get_tonminefarm_headers() -> dict:
-    """Заголовки для API tonminefarm.com"""
+def get_mutant_gifts_headers() -> dict:
+    """Заголовки для API mutant-gifts.xyz"""
     return {
-        "Accept": "*/*",
+        "Accept": "application/json, text/plain, */*",
         "Accept-Language": "ru,en;q=0.9,en-GB;q=0.8,en-US;q=0.7",
         "Connection": "keep-alive",
         "Content-Type": "application/json; charset=UTF-8",
-        "Origin": "https://app.tonminefarm.com",
-        "Referer": "https://app.tonminefarm.com/",
+        "Origin": "https://mutant-gifts.xyz",
+        "Referer": "https://mutant-gifts.xyz/",
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Site": "same-origin",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0",
         "sec-ch-ua": '"Chromium";v="139", "Microsoft Edge WebView2";v="139", "Microsoft Edge";v="139", "Not;A=Brand";v="99"',
         "sec-ch-ua-mobile": "?0",

@@ -1,6 +1,6 @@
-# AgentX Bot
+# Mutant Gifts Bot
 
-[🇷🇺 Russian](README-RU.md) | [🇬🇧 English](README.md)
+[🇷🇺 Russian](README_RU.md) | [🇬🇧 English](README.md)
 
 [<img src="https://res.cloudinary.com/dkgz59pmw/image/upload/v1736756459/knpk224-28px-channel_psjoqn.svg" alt="Channel Link" width="200">](https://t.me/+vpXdTJ_S3mo0ZjIy)
 [<img src="https://res.cloudinary.com/dkgz59pmw/image/upload/v1736756459/knpk224-28px-chat_ixoikd.svg" alt="Chat Link" width="200">](https://t.me/+wWQuct9bljQ0ZDA6)
@@ -14,13 +14,17 @@
    - [Quick Start](#quick-start)
    - [Manual Installation](#manual-installation)
 4. [Settings](#settings)
+   - [Environment (.env) options](#environment-env-options)
 5. [Support and Donations](#support-and-donations)
 6. [Contact](#contact)
 
 ---
 
 ## 📜 Description
-**Agent X Bot** is an automated bot for the [Agent X](https://t.me/agntxbot/node?startapp=252453226) game. Supports multithreading, proxy integration, and automatic game management.
+**Mutant Gifts Bot** is an automated bot for the
+[@mutant_gifts_bot](https://t.me/mutant_gifts_bot?start=_tgr_uI1FOb9iODEy)
+game. It supports multithreading, proxy integration, and automatic game
+management.
 
 ---
 
@@ -37,8 +41,8 @@
 ### Quick Start
 1. **Download the project:**
    ```bash
-   git clone https://github.com/mainiken/agentx.git
-   cd agentx
+   git clone https://github.com/mainiken/mutant_gifts.git
+   cd mutant_gifts
    ```
 
 2. **Install dependencies:**
@@ -93,6 +97,49 @@
 | **DEVICE_PARAMS**         | False                | Use custom device parameters                                |
 | **AUTO_UPDATE**           | True                 | Automatic updates                                           |
 | **CHECK_UPDATE_INTERVAL** | 300                  | Update check interval (seconds)                             |
+
+### Environment (.env) options
+
+Copy `.env-example` to `.env` and adjust as needed. Key automation
+options from `.env-example`:
+
+```ini
+# Telegram API
+API_ID = 
+API_HASH = 
+GLOBAL_CONFIG_PATH = 
+
+# SSL
+FIX_CERT = True
+
+# Session behavior
+SESSION_START_DELAY = 360
+REF_ID = 'r_252453226'
+SESSIONS_PER_PROXY = 1
+USE_PROXY = True
+DISABLE_PROXY_REPLACE = False
+
+# Device and logging
+DEVICE_PARAMS = False
+DEBUG_LOGGING = False
+
+# Updates
+AUTO_UPDATE = True
+CHECK_UPDATE_INTERVAL = 300
+BLACKLISTED_SESSIONS = ""
+
+# Mutant Gifts automation
+AUTO_MUTATION = True
+AUTO_BATTLE = True
+AUTO_UPGRADE = True
+MIN_COINS_BALANCE = 
+```
+
+Descriptions:
+- **AUTO_MUTATION**: enable automatic mutation actions
+- **AUTO_BATTLE**: enable automatic battle actions
+- **AUTO_UPGRADE**: enable automatic upgrades
+- **MIN_COINS_BALANCE**: minimal coin balance to keep before spending
 
 ---
 
