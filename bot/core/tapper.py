@@ -1044,6 +1044,136 @@ class MutantGiftsBot(BaseBot):
                         logger.debug(f"[{self.session_name}] Exception details: {error}")
                     await asyncio.sleep(sleep_duration)
     
+    async def claim_daily_streak(self) -> bool:
+        """Получение ежедневной награды за вход"""
+        try:
+            # Сначала получаем профиль, чтобы узнать текущий стрик
+            profile = await self.get_profile()
+            if not profile or not isinstance(profile, dict):
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить профиль перед клеймом ежедневной награды")
+                return False
+                
+            daily_streak = profile.get('daily_streak', 0)
+            can_claim = profile.get('can_claim_daily_streak', False)
+            
+            if not can_claim:
+                logger.info(f"{self.session_name} | {self.EMOJI['info']} Ежедневная награда уже получена. Текущий стрик: {daily_streak} дней")
+                return False
+            
+            # Выполняем запрос на получение награды
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/profile/claim_daily_streak"
+            )
+            
+            if response and response.get("success") is True:
+                # Получаем обновленный профиль для проверки нового стрика и полученных гемов
+                updated_profile = await self.get_profile()
+                if updated_profile and isinstance(updated_profile, dict):
+                    new_streak = updated_profile.get('daily_streak', 0)
+                    gems_before = profile.get('gems', 0)
+                    gems_after = updated_profile.get('gems', 0)
+                    gems_earned = gems_after - gems_before
+                    
+                    logger.info(f"{self.session_name} | {self.EMOJI['success']} Ежедневная награда за вход получена! Стрик: {new_streak} дней, получено гемов: {gems_earned}")
+                else:
+                    logger.info(f"{self.session_name} | {self.EMOJI['success']} Ежедневная награда за вход получена! Стрик: {daily_streak + 1} дней")
+                return True
+            else:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Не удалось получить ежедневную награду, response: {response}")
+                return False
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения ежедневной награды: {str(error)}")
+            return False
+    
+    async def get_activities(self) -> Optional[List[Dict]]:
+        """Получение списка ежедневных заданий"""
+        try:
+            response = await self.make_mutant_request(
+                method="GET",
+                url=f"{self._base_url}/apiv1/activities"
+            )
+            
+            if response and "activities" in response:
+                activities = response["activities"]
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | {self.EMOJI['info']} Получено {len(activities)} заданий")
+                return activities
+            else:
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить задания, response: {response}")
+                return None
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения заданий: {str(error)}")
+            return None
+    
+    async def claim_activity(self, activity_id: str) -> bool:
+        """Получение награды за выполненное задание"""
+        try:
+            payload = {"id": activity_id}
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/activities/{activity_id}/claim",
+                json=payload
+            )
+            
+            if response and response.get("success") is True:
+                logger.info(f"{self.session_name} | {self.EMOJI['success']} Награда за задание {activity_id} получена")
+                return True
+            else:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Не удалось получить награду за задание {activity_id}, response: {response}")
+                return False
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения награды за задание {activity_id}: {str(error)}")
+            return False
+    
+    async def process_activities(self) -> None:
+        """Обработка ежедневных заданий и получение наград"""
+        activities = await self.get_activities()
+        if not activities:
+            logger.warning(f"{self.session_name} | {self.EMOJI['warning']} Не удалось получить список заданий")
+            return
+        
+        completed_activities = []
+        for activity in activities:
+            if not isinstance(activity, dict):
+                continue
+                
+            activity_id = activity.get("id")
+            current_progress = activity.get("current_progress", 0)
+            target_progress = activity.get("target_progress", 1)
+            reward_gems = activity.get("reward_gems", 0)
+            activity_type = activity.get("type", "unknown")
+            
+            # Проверяем, выполнено ли задание (current_progress >= target_progress)
+            if current_progress >= target_progress and activity.get("status") != 30:
+                completed_activities.append((activity_id, activity_type, reward_gems))
+        
+        if completed_activities:
+            logger.info(f"{self.session_name} | {self.EMOJI['info']} Найдено {len(completed_activities)} выполненных заданий")
+            
+            # Получаем награды за выполненные задания
+            total_claimed = 0
+            total_gems = 0
+            for activity_id, activity_type, reward_gems in completed_activities:
+                if await self.claim_activity(activity_id):
+                    total_claimed += 1
+                    total_gems += reward_gems
+                    # Небольшая задержка между запросами
+                    await asyncio.sleep(uniform(0.5, 1.5))
+            
+            if total_claimed > 0:
+                logger.info(f"{self.session_name} | {self.EMOJI['success']} Получено {total_claimed} наград на сумму {total_gems} гемов")
+                # Обновляем профиль после получения наград
+                await self.get_profile()
+        else:
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | {self.EMOJI['info']} Нет выполненных заданий")
+    
     async def process_mutant_gifts_logic(self) -> None:
         """Основная логика бота для Mutant Gifts"""
         # Получаем профиль пользователя
@@ -1062,9 +1192,35 @@ class MutantGiftsBot(BaseBot):
         gems = profile.get('gems', 0)
         next_unranked_energy_at = profile.get('next_unranked_energy_at')
         next_ranked_energy_at = profile.get('next_ranked_energy_at')
+        can_claim_daily_streak = profile.get('can_claim_daily_streak', False)
+        has_claimable_activity = profile.get('has_claimable_activity', False)
         
         # Выводим компактную информацию о профиле
         logger.info(f"{self.session_name} | {self.EMOJI['character']} {username} | {self.EMOJI['energy']} {unranked_energy}/{ranked_energy} | 💰 {coins} | 💎 {gems}")
+        
+        # Получаем ежедневную награду за вход, если доступна
+        if can_claim_daily_streak:
+            logger.info(f"{self.session_name} | {self.EMOJI['info']} Доступна ежедневная награда за вход")
+            if await self.claim_daily_streak():
+                # Обновляем профиль после получения награды
+                profile = await self.get_profile()
+                if profile:
+                    gems = profile.get('gems', gems)
+                    logger.info(f"{self.session_name} | {self.EMOJI['success']} Профиль обновлен после получения ежедневной награды. Гемов: {gems}")
+        
+        # Обрабатываем ежедневные задания и получаем награды
+        if has_claimable_activity:
+            logger.info(f"{self.session_name} | {self.EMOJI['info']} Есть доступные для получения награды за задания")
+            await self.process_activities()
+            # Обновляем профиль после получения наград за задания
+            profile = await self.get_profile()
+            if profile:
+                gems = profile.get('gems', gems)
+                logger.info(f"{self.session_name} | {self.EMOJI['success']} Профиль обновлен после получения наград за задания. Гемов: {gems}")
+        elif settings.DEBUG_LOGGING:
+            logger.debug(f"{self.session_name} | {self.EMOJI['info']} Нет доступных для получения наград за задания")
+            # Все равно проверяем задания, возможно есть выполненные, но не отмеченные в профиле
+            await self.process_activities()
         
         # Получаем персонажей
         characters = await self.get_characters()
