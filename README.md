@@ -132,14 +132,28 @@ BLACKLISTED_SESSIONS = ""
 AUTO_MUTATION = True
 AUTO_BATTLE = True
 AUTO_UPGRADE = True
+AUTO_DISENCHANT = True
+AUTO_REFILL_ENERGY = True
 MIN_COINS_BALANCE = 
+
+# Disenchant settings
+DISENCHANT_RARITIES = "Common,Uncommon"
+
+# Energy refill settings
+REFILL_ENERGY_TYPE = "ranked"
+MAX_ENERGY_REFILLS = 1
 ```
 
 Descriptions:
 - **AUTO_MUTATION**: enable automatic mutation actions
-- **AUTO_BATTLE**: enable automatic battle actions
+- **AUTO_BATTLE**: enable automatic battle actions  
 - **AUTO_UPGRADE**: enable automatic upgrades
+- **AUTO_DISENCHANT**: enable automatic disenchanting of low rarity characters
+- **AUTO_REFILL_ENERGY**: enable automatic energy refilling with gems
 - **MIN_COINS_BALANCE**: minimal coin balance to keep before spending
+- **DISENCHANT_RARITIES**: comma-separated list of rarities to disenchant (Common, Uncommon, Rare, Epic, Legendary)
+- **REFILL_ENERGY_TYPE**: type of energy to refill ("ranked", "unranked", or "both" for both types)
+- **MAX_ENERGY_REFILLS**: maximum number of energy refills per session for EACH energy type (1=60 gems, 2=120 gems, 3+=240 gems)
 
 ---
 

@@ -227,6 +227,7 @@ class MutantGiftsBot(BaseBot):
         'character': '🎯',
         'activity': '📋',
         'leaderboard': '🏆',
+        'disenchant': '🗑️',
     }
     
     def __init__(self, tg_client: UniversalTelegramClient):
@@ -245,7 +246,10 @@ class MutantGiftsBot(BaseBot):
             'total_gems_earned': 0,
             'total_rating_earned': 0,
             'battles_won': 0,
-            'battles_lost': 0
+            'battles_lost': 0,
+            'unranked_refills': 0,
+            'ranked_refills': 0,
+            'total_gems_spent_on_refills': 0
         }
         
     def get_mutant_gifts_headers(self) -> Dict[str, str]:
@@ -530,10 +534,13 @@ class MutantGiftsBot(BaseBot):
             logger.error(f"{self.session_name} | Ошибка получения данных по мутациям: {str(error)}")
             return None
 
-    async def level_up_character(self, character_id: str) -> bool:
-        """Улучшение уровня персонажа"""
+    async def level_up_character(self, character_id: str, current_level: int) -> bool:
+        """Улучшение уровня персонажа (обновленная версия API)"""
         try:
-            payload = {"id": character_id}
+            payload = {
+                "id": character_id,
+                "level": current_level
+            }
             response = await self.make_mutant_request(
                 method="POST",
                 url=f"{self._base_url}/apiv1/characters/{character_id}/level_up",
@@ -541,13 +548,129 @@ class MutantGiftsBot(BaseBot):
             )
             if response and response.get("success") is True:
                 if settings.DEBUG_LOGGING:
-                    logger.debug(f"{self.session_name} | Персонаж {character_id} улучшен")
+                    logger.debug(f"{self.session_name} | Персонаж {character_id} улучшен до уровня {current_level}")
                 return True
             logger.error(f"{self.session_name} | Не удалось улучшить персонажа {character_id}, response: {response}")
             return False
         except Exception as error:
             logger.error(f"{self.session_name} | Ошибка улучшения персонажа {character_id}: {str(error)}")
             return False
+
+    async def disenchant_character(self, character_id: str) -> bool:
+        """Распыление персонажа"""
+        try:
+            response = await self.make_mutant_request(
+                method="DELETE",
+                url=f"{self._base_url}/apiv1/characters/{character_id}"
+            )
+            if response and response.get("success") is True:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Персонаж {character_id} распылен")
+                return True
+            logger.error(f"{self.session_name} | Не удалось распылить персонажа {character_id}, response: {response}")
+            return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка распыления персонажа {character_id}: {str(error)}")
+            return False
+    
+    async def refill_unranked_energy(self) -> bool:
+        """Восстановление обычной энергии за гемы"""
+        try:
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/profile/refill_unranked_energy",
+                json={}
+            )
+            if response and response.get("success") is True:
+                logger.info(f"{self.session_name} | {self.EMOJI['energy']} Обычная энергия восстановлена за гемы")
+                return True
+            logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось восстановить обычную энергию, response: {response}")
+            return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка восстановления обычной энергии: {str(error)}")
+            return False
+    
+    async def refill_ranked_energy(self) -> bool:
+        """Восстановление рейтинговой энергии за гемы"""
+        try:
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/profile/refill_ranked_energy",
+                json={}
+            )
+            if response and response.get("success") is True:
+                logger.info(f"{self.session_name} | {self.EMOJI['energy']} Рейтинговая энергия восстановлена за гемы")
+                return True
+            logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось восстановить рейтинговую энергию, response: {response}")
+            return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка восстановления рейтинговой энергии: {str(error)}")
+            return False
+    
+    def get_refill_cost(self, refill_count: int) -> int:
+        """Возвращает стоимость восстановления энергии в гемах"""
+        if refill_count == 1:
+            return 60
+        elif refill_count == 2:
+            return 120
+        else:  # 3+ восстановления
+            return 240
+    
+    async def smart_energy_refill(self, profile: Dict, energy_type: str = "ranked") -> bool:
+        """Умное восстановление энергии на основе настроек
+        
+        Args:
+            profile: Профиль пользователя
+            energy_type: Тип энергии 'ranked' или 'unranked'
+        
+        Returns:
+            bool: True если восстановление прошло успешно
+        """
+        if not settings.AUTO_REFILL_ENERGY:
+            return False
+        
+        if not isinstance(profile, dict):
+            return False
+        
+        current_gems = profile.get('gems', 0)
+        
+        # Определяем количество уже сделанных восстановлений
+        if energy_type == "ranked":
+            refills_made = self._stats['ranked_refills']
+            can_refill_key = 'refill_price_ranked_gems'  # Ключ из профиля
+        else:
+            refills_made = self._stats['unranked_refills']
+            can_refill_key = 'refill_price_unranked_gems'
+        
+        # Проверяем, можно ли делать восстановление
+        if refills_made >= settings.MAX_ENERGY_REFILLS:
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | 🚫 Достигнут лимит восстановлений {energy_type} энергии: {refills_made}/{settings.MAX_ENERGY_REFILLS}")
+            return False
+        
+        # Рассчитываем стоимость следующего восстановления
+        next_refill_cost = self.get_refill_cost(refills_made + 1)
+        
+        # Проверяем достаточно ли гемов
+        if current_gems < next_refill_cost:
+            logger.warning(f"{self.session_name} | 💵 Недостаточно гемов для восстановления {energy_type} энергии: {current_gems} < {next_refill_cost}")
+            return False
+        
+        # Выполняем восстановление
+        logger.info(f"{self.session_name} | 💰 Восстанавливаем {energy_type} энергию за {next_refill_cost} гемов (восстановление #{refills_made + 1})")
+        
+        if energy_type == "ranked":
+            success = await self.refill_ranked_energy()
+            if success:
+                self._stats['ranked_refills'] += 1
+                self._stats['total_gems_spent_on_refills'] += next_refill_cost
+        else:
+            success = await self.refill_unranked_energy()
+            if success:
+                self._stats['unranked_refills'] += 1
+                self._stats['total_gems_spent_on_refills'] += next_refill_cost
+        
+        return success
 
     async def perform_first_run_tutorial(self) -> None:
         """Прохождение первичного обучения при первом запуске сессии.
@@ -588,7 +711,11 @@ class MutantGiftsBot(BaseBot):
                     character_to_level_id = characters[0]["id"]
 
             if character_to_level_id:
-                await self.level_up_character(character_to_level_id)
+                # Находим персонажа для получения его уровня
+                char_to_level = next((c for c in characters if c.get('id') == character_to_level_id), None)
+                if char_to_level:
+                    current_level = char_to_level.get('level', 1)
+                    await self.level_up_character(character_to_level_id, current_level)
                 await asyncio.sleep(1)
 
             await self.get_profile()
@@ -763,6 +890,66 @@ class MutantGiftsBot(BaseBot):
 
         return desired_ids
 
+    async def auto_disenchant_low_rarity(self, characters: List[Dict]) -> List[Dict]:
+        """Автоматическое распыление карточек низкой редкости"""
+        if not settings.AUTO_DISENCHANT:
+            return characters
+        
+        if not isinstance(characters, list) or not characters:
+            return characters
+            
+        disenchant_rarities = settings.disenchant_rarities
+        if not disenchant_rarities:
+            return characters
+        
+        # Находим закрепленных персонажей (не распыляем)
+        pinned_ids = {char['id'] for char in characters 
+                     if isinstance(char, dict) and char.get('pin_index') is not None}
+        
+        # Находим кандидатов на распыление
+        candidates_to_disenchant = []
+        for char in characters:
+            if not isinstance(char, dict) or char.get('id') in pinned_ids:
+                continue
+                
+            char_rarity = char.get('rarity', 'Unknown')
+            if char_rarity in disenchant_rarities:
+                candidates_to_disenchant.append(char)
+        
+        if not candidates_to_disenchant:
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | 🗑️ Нет карточек для распыления")
+            return characters
+        
+        logger.info(f"{self.session_name} | 🗑️ Найдено {len(candidates_to_disenchant)} карточек для распыления ({', '.join(disenchant_rarities)})")
+        
+        disenchanted_count = 0
+        remaining_characters = characters.copy()
+        
+        for char in candidates_to_disenchant:
+            char_id = char.get('id')
+            char_name = char.get('name', 'Unknown')
+            char_rarity = char.get('rarity', 'Unknown')
+            
+            if await self.disenchant_character(char_id):
+                disenchanted_count += 1
+                logger.info(f"{self.session_name} | 🗑️ Распылен: {char_name} ({char_rarity})")
+                # Удаляем из списка
+                remaining_characters = [c for c in remaining_characters 
+                                      if not (isinstance(c, dict) and c.get('id') == char_id)]
+                # Небольшая задержка между распылениями
+                await asyncio.sleep(uniform(0.5, 1.5))
+            else:
+                logger.error(f"{self.session_name} | ❌ Не удалось распылить {char_name} ({char_rarity})")
+        
+        if disenchanted_count > 0:
+            logger.info(f"{self.session_name} | ✨ Распылено {disenchanted_count} карточек!")
+            # Обновляем список персонажей
+            updated_characters = await self.get_characters()
+            return updated_characters or remaining_characters
+        
+        return remaining_characters
+
     async def auto_upgrade_pinned(self, characters: List[Dict], coins: int) -> Tuple[int, List[Dict]]:
         if not settings.AUTO_UPGRADE:
             return coins, characters
@@ -775,17 +962,21 @@ class MutantGiftsBot(BaseBot):
         for char in pinned:
             next_level = char.get('next_level') or {}
             cost = next_level.get('cost') or 0
+            current_level = char.get('level', 1)
+            
             while cost and (current_coins - cost) >= settings.MIN_COINS_BALANCE:
-                ok = await self.level_up_character(char['id'])
+                ok = await self.level_up_character(char['id'], current_level)
                 if not ok:
                     break
                 current_coins -= cost
+                current_level += 1  # Увеличиваем уровень
                 await asyncio.sleep(0.5)
                 # Обновляем персонажа из свежего списка
                 updated_characters = await self.get_characters() or updated_characters
                 char = next((c for c in updated_characters if isinstance(c, dict) and c.get('id') == char.get('id')), char)
                 next_level = char.get('next_level') or {}
                 cost = next_level.get('cost') or 0
+                current_level = char.get('level', current_level)  # Обновляем уровень из базы
 
         return current_coins, (updated_characters or characters)
     
@@ -907,16 +1098,28 @@ class MutantGiftsBot(BaseBot):
         """Вывод статистики сессии перед сном"""
         total_battles = self._stats['unranked_battles'] + self._stats['ranked_battles']
         
-        if total_battles > 0:
+        # Общая статистика восстановлений
+        total_refills = self._stats['unranked_refills'] + self._stats['ranked_refills']
+        
+        if total_battles > 0 or total_refills > 0:
             logger.info(f"{self.session_name} | {'='*50}")
             logger.info(f"{self.session_name} | 📊 СТАТИСТИКА СЕССИИ:")
             logger.info(f"{self.session_name} | {'='*50}")
-            logger.info(f"{self.session_name} | {self.EMOJI['battle']} Всего боев: {total_battles}")
-            logger.info(f"{self.session_name} |   ├─ Обычные бои: {self._stats['unranked_battles']}")
-            logger.info(f"{self.session_name} |   └─ Рейтинговые бои: {self._stats['ranked_battles']}")
-            logger.info(f"{self.session_name} | 🏆 Победы: {self._stats['battles_won']} | Поражения: {self._stats['battles_lost']}")
+            
+            if total_battles > 0:
+                logger.info(f"{self.session_name} | {self.EMOJI['battle']} Всего боев: {total_battles}")
+                logger.info(f"{self.session_name} |   ├─ Обычные бои: {self._stats['unranked_battles']}")
+                logger.info(f"{self.session_name} |   └─ Рейтинговые бои: {self._stats['ranked_battles']}")
+                logger.info(f"{self.session_name} | 🏆 Победы: {self._stats['battles_won']} | Поражения: {self._stats['battles_lost']}")
+            
+            if total_refills > 0:
+                logger.info(f"{self.session_name} | {self.EMOJI['energy']} Восстановлений энергии: {total_refills}")
+                logger.info(f"{self.session_name} |   ├─ Обычная: {self._stats['unranked_refills']}")
+                logger.info(f"{self.session_name} |   └─ Рейтинговая: {self._stats['ranked_refills']}")
+                logger.info(f"{self.session_name} | 💸 Потрачено гемов на восстановление: {self._stats['total_gems_spent_on_refills']}")
+            
             logger.info(f"{self.session_name} | 💰 Монеты заработано: {self._stats['total_coins_earned']}")
-            logger.info(f"{self.session_name} | 💎 Камни заработано: {self._stats['total_gems_earned']}")
+            logger.info(f"{self.session_name} | 💸 Камни заработано: {self._stats['total_gems_earned']}")
             logger.info(f"{self.session_name} | ⭐ Рейтинг заработано: {self._stats['total_rating_earned']}")
             logger.info(f"{self.session_name} | {'='*50}")
         
@@ -937,38 +1140,34 @@ class MutantGiftsBot(BaseBot):
     
     def calculate_sleep_duration(self, unranked_energy: int, ranked_energy: int, 
                                 next_unranked_energy_at: int, next_ranked_energy_at: int) -> int:
-        """Ждем до полного заряда энергии.
+        """Рассчитываем время сна до появления новой энергии.
         - Обычные бои: максимум 12, +1 каждые 2 часа.
         - Рейтинговые бои: максимум 6, +1 каждые 3 часа.
-        Возвращаем время до момента, когда ХОТЯ БЫ один тип энергии станет ПОЛНЫМ.
-        Используем точные timestamp ближайшего тика, если они есть; иначе считаем по интервалам."""
+        Если есть ЛЮБАЯ энергия - просыпаемся быстро для боев.
+        Иначе ждем до появления первой единицы энергии любого типа."""
         import datetime
+
+        # Если есть любая энергия - сразу просыпаемся для боев
+        if unranked_energy > 0 or ranked_energy > 0:
+            return 60  # Быстрое пробуждение для использования энергии
 
         now_ts = int(datetime.datetime.now().timestamp())
 
-        def time_to_full(current_energy: int, next_at: int, max_energy: int, interval_sec: int) -> int:
+        def time_to_next_energy(current_energy: int, next_at: int, max_energy: int, interval_sec: int) -> int:
             if current_energy >= max_energy:
-                return 0
-            missing = max_energy - current_energy
+                return float('inf')  # Уже полная энергия
             # Время до ближайшего тика
             if next_at and next_at > now_ts:
-                first_tick = next_at - now_ts
+                return next_at - now_ts
             else:
-                first_tick = interval_sec
-            # Остальные тики
-            remaining_ticks_time = max(0, missing - 1) * interval_sec
-            return first_tick + remaining_ticks_time
+                return interval_sec
 
-        unranked_ttf = time_to_full(unranked_energy, next_unranked_energy_at, 12, 2 * 3600)
-        ranked_ttf = time_to_full(ranked_energy, next_ranked_energy_at, 6, 3 * 3600)
+        unranked_next = time_to_next_energy(unranked_energy, next_unranked_energy_at, 12, 2 * 3600)
+        ranked_next = time_to_next_energy(ranked_energy, next_ranked_energy_at, 6, 3 * 3600)
 
-        # Если какой-то тип уже полный — просыпаемся быстро
-        if unranked_ttf == 0 or ranked_ttf == 0:
-            return 180
-
-        # Ждем до ближайшего полного заряда одного из типов
-        sleep_time = min(unranked_ttf, ranked_ttf) + 30  # небольшой буфер
-        return max(60, sleep_time)
+        # Ждем до появления первой единицы энергии любого типа
+        sleep_time = min(unranked_next, ranked_next) + 30  # небольшой буфер
+        return max(180, sleep_time)  # Минимум 3 минуты сна
     
     async def login(self, tg_web_data: str) -> bool:
         """Авторизация в Mutant Gifts (переопределяем метод BaseBot)"""
@@ -1196,7 +1395,7 @@ class MutantGiftsBot(BaseBot):
         has_claimable_activity = profile.get('has_claimable_activity', False)
         
         # Выводим компактную информацию о профиле
-        logger.info(f"{self.session_name} | {self.EMOJI['character']} {username} | {self.EMOJI['energy']} {unranked_energy}/{ranked_energy} | 💰 {coins} | 💎 {gems}")
+        logger.info(f"{self.session_name} | {self.EMOJI['character']} {username} | {self.EMOJI['energy']} {unranked_energy}({ranked_energy}) | 💰 {coins} | 💸 {gems}")
         
         # Получаем ежедневную награду за вход, если доступна
         if can_claim_daily_streak:
@@ -1251,6 +1450,10 @@ class MutantGiftsBot(BaseBot):
                     await self.ensure_best_pins(characters)
                 await asyncio.sleep(1)
 
+        # Авто-распыление карточек низкой редкости
+        if settings.AUTO_DISENCHANT:
+            characters = await self.auto_disenchant_low_rarity(characters)
+        
         # Обеспечиваем правильные пины по приоритету редкости
         selected_ids = await self.ensure_best_pins(characters)
         characters = await self.get_characters() or characters
@@ -1271,6 +1474,39 @@ class MutantGiftsBot(BaseBot):
                 await self.process_battles(characters, "Unranked", unranked_energy)
             if ranked_energy > 0:
                 await self.process_battles(characters, "Ranked", ranked_energy)
+            
+            # После боев проверяем на восстановление энергии
+            if settings.AUTO_REFILL_ENERGY:
+                energy_type = settings.REFILL_ENERGY_TYPE.lower()
+                refilled_any = False
+                
+                if energy_type == "both":
+                    # Восстанавливаем оба типа энергии
+                    if unranked_energy == 0:
+                        refill_success = await self.smart_energy_refill(profile, "unranked")
+                        if refill_success:
+                            refilled_any = True
+                    
+                    if ranked_energy == 0:
+                        refill_success = await self.smart_energy_refill(profile, "ranked")
+                        if refill_success:
+                            refilled_any = True
+                            
+                elif energy_type in ["ranked", "unranked"]:
+                    # Проверяем текущую энергию после боев
+                    current_energy = unranked_energy if energy_type == "unranked" else ranked_energy
+                    if current_energy == 0:  # Восстанавливаем только если энергия кончилась
+                        refill_success = await self.smart_energy_refill(profile, energy_type)
+                        if refill_success:
+                            refilled_any = True
+                            
+                # Если что-то восстановили - продолжаем бои
+                if refilled_any:
+                    # Обновляем профиль после восстановления
+                    updated_profile_after_refill = await self.get_profile()
+                    if updated_profile_after_refill:
+                        logger.info(f"{self.session_name} | {self.EMOJI['success']} Энергия восстановлена! Продолжаем бои.")
+                        return  # Возвращаемся к началу цикла для новых боев
         
         # Получаем обновленный профиль после боев
         updated_profile = await self.get_profile()
@@ -1286,6 +1522,11 @@ class MutantGiftsBot(BaseBot):
         # Логируем состояние энергии после боев
         logger.info(f"{self.session_name} | {self.EMOJI['info']} Состояние после боев: обычная энергия {unranked_energy}, рейтинговая энергия {ranked_energy}")
         
+        # Если есть любая энергия - продолжаем бои без сна
+        if unranked_energy > 0 or ranked_energy > 0:
+            logger.info(f"{self.session_name} | {self.EMOJI['energy']} Энергия доступна! Обычная: {unranked_energy}, Рейтинговая: {ranked_energy}. Продолжаем бои!")
+            return  # Возвращаемся к началу цикла без сна
+        
         # Рассчитываем время сна на основе данных профиля
         # Преобразуем строки в int для timestamp
         next_unranked_timestamp = int(next_unranked_energy_at) if next_unranked_energy_at else 0
@@ -1300,10 +1541,7 @@ class MutantGiftsBot(BaseBot):
         self.print_session_stats(sleep_duration)
         
         # Краткая информация о состоянии энергии
-        if unranked_energy == 0 and ranked_energy == 0:
-            logger.info(f"{self.session_name} | {self.EMOJI['info']} Нет энергии")
-        else:
-            logger.info(f"{self.session_name} | {self.EMOJI['info']} Энергия: {unranked_energy}/{ranked_energy}")
+        logger.info(f"{self.session_name} | {self.EMOJI['info']} Нет энергии для боев, засыпаем до восстановления")
         
         await asyncio.sleep(sleep_duration)
 

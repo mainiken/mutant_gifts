@@ -30,10 +30,23 @@ class Settings(BaseSettings):
     AUTO_MUTATION: bool = True
     AUTO_BATTLE: bool = True
     AUTO_UPGRADE: bool = True
+    AUTO_DISENCHANT: bool = True
     MIN_COINS_BALANCE: int = 0
+    
+    # Настройки распыления карточек
+    DISENCHANT_RARITIES: str = "Common,Uncommon"
+    
+    # Настройки восстановления энергии
+    AUTO_REFILL_ENERGY: bool = True
+    REFILL_ENERGY_TYPE: str = "ranked"  # "ranked", "unranked" или "both"
+    MAX_ENERGY_REFILLS: int = 1  # Максимальное количество восстановлений
 
     @property
     def blacklisted_sessions(self) -> List[str]:
         return [s.strip() for s in self.BLACKLISTED_SESSIONS.split(',') if s.strip()]
+    
+    @property
+    def disenchant_rarities(self) -> List[str]:
+        return [r.strip() for r in self.DISENCHANT_RARITIES.split(',') if r.strip()]
 
 settings = Settings()

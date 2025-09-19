@@ -31,3 +31,8 @@ bot/core/build/
 * text=auto
 bot/config/proxies.txt
 
+# Игнорировать WARP.md файл
+WARP.md
+
+# Игнорировать все тестовые файлы
+test_*
