@@ -1140,34 +1140,49 @@ class MutantGiftsBot(BaseBot):
     
     def calculate_sleep_duration(self, unranked_energy: int, ranked_energy: int, 
                                 next_unranked_energy_at: int, next_ranked_energy_at: int) -> int:
-        """Рассчитываем время сна до появления новой энергии.
+        """Рассчитываем время сна до накопления 6 единиц энергии.
         - Обычные бои: максимум 12, +1 каждые 2 часа.
         - Рейтинговые бои: максимум 6, +1 каждые 3 часа.
-        Если есть ЛЮБАЯ энергия - просыпаемся быстро для боев.
-        Иначе ждем до появления первой единицы энергии любого типа."""
+        Ждем 6 единиц любого типа энергии - какой накопится быстрее."""
         import datetime
 
-        # Если есть любая энергия - сразу просыпаемся для боев
-        if unranked_energy > 0 or ranked_energy > 0:
-            return 60  # Быстрое пробуждение для использования энергии
+        # Если у нас уже есть 6+ энергии - просыпаемся сразу
+        if unranked_energy >= 6 or ranked_energy >= 6:
+            return 60  # Достаточно энергии - начинаем бои
 
         now_ts = int(datetime.datetime.now().timestamp())
 
-        def time_to_next_energy(current_energy: int, next_at: int, max_energy: int, interval_sec: int) -> int:
-            if current_energy >= max_energy:
-                return float('inf')  # Уже полная энергия
+        def time_to_six_energy(current_energy: int, next_at: int, max_energy: int, interval_sec: int) -> int:
+            target_energy = 6
+            if current_energy >= target_energy:
+                return 0  # Уже достаточно энергии
+            
+            # Не можем накопить 6, если максимум меньше
+            actual_target = min(target_energy, max_energy)
+            if current_energy >= actual_target:
+                return 0
+                
+            needed_energy = actual_target - current_energy
+            
             # Время до ближайшего тика
             if next_at and next_at > now_ts:
-                return next_at - now_ts
+                first_tick_time = next_at - now_ts
             else:
-                return interval_sec
+                first_tick_time = interval_sec
+                
+            # Остальные тики
+            remaining_ticks = max(0, needed_energy - 1)
+            remaining_time = remaining_ticks * interval_sec
+            
+            return first_tick_time + remaining_time
 
-        unranked_next = time_to_next_energy(unranked_energy, next_unranked_energy_at, 12, 2 * 3600)
-        ranked_next = time_to_next_energy(ranked_energy, next_ranked_energy_at, 6, 3 * 3600)
+        # Время до 6 единиц каждого типа
+        unranked_six_time = time_to_six_energy(unranked_energy, next_unranked_energy_at, 12, 2 * 3600)
+        ranked_six_time = time_to_six_energy(ranked_energy, next_ranked_energy_at, 6, 3 * 3600)
 
-        # Ждем до появления первой единицы энергии любого типа
-        sleep_time = min(unranked_next, ranked_next) + 30  # небольшой буфер
-        return max(180, sleep_time)  # Минимум 3 минуты сна
+        # Просыпаемся когда любой тип достигнет 6 единиц
+        sleep_time = min(unranked_six_time, ranked_six_time) + 30  # небольшой буфер
+        return max(300, sleep_time)  # Минимум 5 минут сна
     
     async def login(self, tg_web_data: str) -> bool:
         """Авторизация в Mutant Gifts (переопределяем метод BaseBot)"""
