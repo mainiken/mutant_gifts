@@ -537,9 +537,10 @@ class MutantGiftsBot(BaseBot):
     async def level_up_character(self, character_id: str, current_level: int) -> bool:
         """Улучшение уровня персонажа (обновленная версия API)"""
         try:
+            next_level = current_level + 1
             payload = {
                 "id": character_id,
-                "level": current_level
+                "level": next_level
             }
             response = await self.make_mutant_request(
                 method="POST",
@@ -548,7 +549,7 @@ class MutantGiftsBot(BaseBot):
             )
             if response and response.get("success") is True:
                 if settings.DEBUG_LOGGING:
-                    logger.debug(f"{self.session_name} | Персонаж {character_id} улучшен до уровня {current_level}")
+                    logger.debug(f"{self.session_name} | Персонаж {character_id} улучшен до уровня {next_level}")
                 return True
             logger.error(f"{self.session_name} | Не удалось улучшить персонажа {character_id}, response: {response}")
             return False
@@ -1141,7 +1142,7 @@ class MutantGiftsBot(BaseBot):
     def calculate_sleep_duration(self, unranked_energy: int, ranked_energy: int, 
                                 next_unranked_energy_at: int, next_ranked_energy_at: int) -> int:
         """Рассчитываем время сна до накопления 6 единиц энергии.
-        - Обычные бои: максимум 12, +1 каждые 2 часа.
+        - Обычные бои: максимум 6, +1 каждый 1 час.
         - Рейтинговые бои: максимум 6, +1 каждые 3 часа.
         Ждем 6 единиц любого типа энергии - какой накопится быстрее."""
         import datetime
@@ -1177,7 +1178,7 @@ class MutantGiftsBot(BaseBot):
             return first_tick_time + remaining_time
 
         # Время до 6 единиц каждого типа
-        unranked_six_time = time_to_six_energy(unranked_energy, next_unranked_energy_at, 12, 2 * 3600)
+        unranked_six_time = time_to_six_energy(unranked_energy, next_unranked_energy_at, 6, 1 * 3600)
         ranked_six_time = time_to_six_energy(ranked_energy, next_ranked_energy_at, 6, 3 * 3600)
 
         # Просыпаемся когда любой тип достигнет 6 единиц
