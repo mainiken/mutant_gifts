@@ -1572,32 +1572,11 @@ class MutantGiftsBot(BaseBot):
                 gems = updated_profile.get('gems', gems)
                 logger.info(f"{self.session_name} | {self.EMOJI['success']} Профиль обновлен после получения наград. Гемов: {gems}")
         
-
-        # ШАГ 5: Автоматическая мутация за гемы (только если остается запас гемов для следующего рефилла)
-        if settings.AUTO_MUTATION:
+        # ШАГ 5: Автоматическая мутация за гемы (если достаточно гемов)
+        if settings.AUTO_MUTATION and gems >= self._get_mutation_gems_price(profile):
             mutation_price = self._get_mutation_gems_price(profile)
-
-            # --- NEW LOGIC: Calculate safety margin for next refill ---
-            # Приоритет: сохраняем гемы на следующий рефилл для любого типа энергии, который сейчас равен 0,
-            # до достижения лимита settings.MAX_ENERGY_REFILLS.
-            safety_margin = 0
-
-            # 1. Safety for Ranked Refill
-            if ranked_energy == 0 and self._stats['ranked_refills'] < settings.MAX_ENERGY_REFILLS:
-                next_ranked_cost = self.get_refill_cost(self._stats['ranked_refills'] + 1)
-                safety_margin = max(safety_margin, next_ranked_cost)
-
-            # 2. Safety for Unranked Refill
-            if unranked_energy == 0 and self._stats['unranked_refills'] < settings.MAX_ENERGY_REFILLS:
-                next_unranked_cost = self.get_refill_cost(self._stats['unranked_refills'] + 1)
-                # Берем максимальную стоимость из двух, чтобы покрыть наиболее дорогой необходимый рефилл.
-                safety_margin = max(safety_margin, next_unranked_cost)
-
-
-            required_gems = mutation_price + safety_margin
-
-            if mutation_price > 0 and gems >= required_gems:
-                logger.info(f"{self.session_name} | 🧬 Выполняем мутацию за {mutation_price} гемов. Запас на рефилл: {safety_margin} гемов")
+            if mutation_price > 0 and gems >= mutation_price:
+                logger.info(f"{self.session_name} | 🧬 Выполняем мутацию за {mutation_price} гемов")
                 mutation_result = await self.mutate_gems()
                 if mutation_result:
                     char_name = mutation_result.get('name', 'Unknown')
@@ -1608,10 +1587,8 @@ class MutantGiftsBot(BaseBot):
                     # Обновляем профиль после мутации
                     profile = await self.get_profile() or profile
                     gems = profile.get('gems', 0) if profile else 0
-            else:
-                if settings.DEBUG_LOGGING or mutation_price > 0:
-                     if mutation_price > 0:
-                        logger.info(f"{self.session_name} | 🚫 Отмена мутации: {gems} гемов < {required_gems} (цена {mutation_price} + запас {safety_margin})")        # Получаем обновленный профиль после боев
+        
+        # Получаем обновленный профиль после боев
         updated_profile = await self.get_profile()
         if updated_profile:
             unranked_energy = updated_profile.get('unranked_energy', 0)
