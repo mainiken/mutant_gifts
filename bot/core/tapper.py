@@ -561,6 +561,40 @@ class MutantGiftsBot(BaseBot):
             logger.error(f"{self.session_name} | Ошибка улучшения персонажа {character_id}: {str(error)}")
             return False
 
+    async def get_character_upgrade_cost(self, character_id: str, current_level: int) -> int:
+        """Получение стоимости прокачки персонажа"""
+        try:
+            # Используем формулу на основе реальных наблюдений
+            # Из логов видно что стоимость растет экспоненциально
+            # Примерные значения: уровень 31->32 = ~323117 монет
+            
+            # Формула основана на наблюдениях из игры
+            if current_level <= 10:
+                base_cost = 100
+                multiplier = 1.2
+            elif current_level <= 20:
+                base_cost = 500
+                multiplier = 1.3
+            elif current_level <= 30:
+                base_cost = 2000
+                multiplier = 1.4
+            else:
+                # Для высоких уровней (30+)
+                base_cost = 10000
+                multiplier = 1.5
+            
+            calculated_cost = int(base_cost * (current_level ** multiplier))
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | Рассчитана стоимость прокачки для {character_id} (уровень {current_level}): {calculated_cost}")
+            
+            return calculated_cost
+            
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения стоимости прокачки {character_id}: {str(error)}")
+            # Возвращаем базовую стоимость в случае ошибки
+            return 1000 * current_level
+
     async def disenchant_character(self, character_id: str) -> bool:
         """Распыление персонажа"""
         try:
@@ -999,32 +1033,107 @@ class MutantGiftsBot(BaseBot):
     async def auto_upgrade_pinned(self, characters: List[Dict], coins: int) -> Tuple[int, List[Dict]]:
         if not settings.AUTO_UPGRADE:
             return coins, characters
+            
         updated_characters = characters
-        current_coins = coins
         pinned = [c for c in characters if isinstance(c, dict) and c.get('pin_index') is not None]
         # Сортируем пины по индексу 0..2
         pinned.sort(key=lambda c: c.get('pin_index', 0))
 
-        for char in pinned:
-            next_level = char.get('next_level') or {}
-            cost = next_level.get('cost') or 0
-            current_level = char.get('level', 1)
-            
-            while cost and (current_coins - cost) >= settings.MIN_COINS_BALANCE:
-                ok = await self.level_up_character(char['id'], current_level)
-                if not ok:
-                    break
-                current_coins -= cost
-                current_level += 1  # Увеличиваем уровень
-                await asyncio.sleep(0.5)
-                # Обновляем персонажа из свежего списка
-                updated_characters = await self.get_characters() or updated_characters
-                char = next((c for c in updated_characters if isinstance(c, dict) and c.get('id') == char.get('id')), char)
-                next_level = char.get('next_level') or {}
-                cost = next_level.get('cost') or 0
-                current_level = char.get('level', current_level)  # Обновляем уровень из базы
+        if not pinned:
+            logger.info(f"{self.session_name} | 📌 Нет закрепленных персонажей для прокачки")
+            return coins, characters
 
-        return current_coins, (updated_characters or characters)
+        logger.info(f"{self.session_name} | 🔧 Начинаем прокачку {len(pinned)} закрепленных персонажей")
+        
+        for char in pinned:
+            char_id = char.get('id')
+            char_name = char.get('name', 'Unknown')
+            char_level = char.get('level', 1)
+            pin_index = char.get('pin_index', 0)
+            
+            logger.info(f"{self.session_name} | 🔧 Прокачиваем {char_name} (пин {pin_index}, уровень {char_level})")
+            
+            # Получаем актуальный профиль для проверки баланса
+            current_profile = await self.get_profile()
+            if not current_profile:
+                logger.error(f"{self.session_name} | ❌ Не удалось получить профиль для проверки баланса")
+                break
+                
+            current_coins = current_profile.get('coins', 0)
+            
+            # Получаем актуальные данные персонажей
+            fresh_characters = await self.get_characters()
+            if not fresh_characters:
+                logger.error(f"{self.session_name} | ❌ Не удалось получить актуальные данные персонажей")
+                break
+                
+            # Находим актуального персонажа
+            fresh_char = next((c for c in fresh_characters if isinstance(c, dict) and c.get('id') == char_id), None)
+            if not fresh_char:
+                logger.error(f"{self.session_name} | ❌ Персонаж {char_name} не найден в актуальных данных")
+                continue
+                
+            current_level = fresh_char.get('level', 1)
+            
+            # Получаем стоимость прокачки через новый метод
+            cost = await self.get_character_upgrade_cost(char_id, current_level)
+            
+            if cost <= 0:
+                logger.warning(f"{self.session_name} | ⚠️ Некорректная стоимость прокачки для {char_name}: {cost}, пропускаем")
+                continue
+            
+            # Прокачиваем пока хватает монет
+            upgrades_count = 0
+            while cost > 0 and (current_coins - cost) >= settings.MIN_COINS_BALANCE:
+                logger.info(f"{self.session_name} | 💰 Прокачиваем {char_name} с {current_level} до {current_level + 1} за {cost} монет (баланс: {current_coins})")
+                
+                success = await self.level_up_character(char_id, current_level)
+                if not success:
+                    logger.error(f"{self.session_name} | ❌ Не удалось прокачать {char_name}")
+                    break
+                    
+                upgrades_count += 1
+                current_coins -= cost
+                current_level += 1
+                
+                await asyncio.sleep(0.5)
+                
+                # Получаем обновленные данные для следующей итерации
+                updated_profile = await self.get_profile()
+                if updated_profile:
+                    current_coins = updated_profile.get('coins', current_coins)
+                
+                updated_chars = await self.get_characters()
+                if updated_chars:
+                    updated_characters = updated_chars
+                    fresh_char = next((c for c in updated_chars if isinstance(c, dict) and c.get('id') == char_id), fresh_char)
+                    current_level = fresh_char.get('level', current_level)
+                    
+                    # Получаем стоимость следующего уровня через новый метод
+                    cost = await self.get_character_upgrade_cost(char_id, current_level)
+                    
+                    if cost <= 0:
+                        logger.warning(f"{self.session_name} | ⚠️ Некорректная стоимость следующего уровня для {char_name}: {cost}, завершаем")
+                        break
+                else:
+                    # Если не удалось получить обновленные данные, прерываем цикл
+                    logger.error(f"{self.session_name} | ❌ Не удалось получить обновленные данные персонажей, завершаем прокачку")
+                    break
+            
+            if upgrades_count > 0:
+                logger.info(f"{self.session_name} | ✅ {char_name} прокачан на {upgrades_count} уровней (итоговый уровень: {current_level})")
+            else:
+                logger.info(f"{self.session_name} | 💸 Недостаточно монет для прокачки {char_name} (нужно: {cost}, доступно: {current_coins - settings.MIN_COINS_BALANCE})")
+
+        # Получаем финальные данные
+        final_profile = await self.get_profile()
+        final_coins = final_profile.get('coins', coins) if final_profile else coins
+        
+        final_characters = await self.get_characters()
+        if final_characters:
+            updated_characters = final_characters
+            
+        return final_coins, updated_characters
     
     async def start_battle(self, character_ids: List[str], battle_type: str = "Unranked") -> Optional[Dict]:
         """Запуск боя с выбранными персонажами"""
@@ -1435,15 +1544,16 @@ class MutantGiftsBot(BaseBot):
                 logger.debug(f"{self.session_name} | {self.EMOJI['info']} Нет выполненных заданий")
     
     async def process_mutant_gifts_logic(self) -> None:
-        """Основная логика бота для Mutant Gifts с новыми приоритетами
+        """Основная логика бота для Mutant Gifts с исправленными приоритетами
         
         Логика:
         1. Проверяем карты и прокачиваем уровни карт
-        2. Бьем обычные бои
-        3. Бьем рейтинговые бои
-        4. Проверяем таски и забираем гемы
+        2. ПРИОРИТЕТ: Проверяем таски и забираем гемы (для рефиллов)
+        3. Бьем обычные бои
+        4. Бьем рейтинговые бои
         5. Делаем рефилл за гемы (с приоритетом на ранговые)
-        6. Повторяем цикл или идем спать
+        6. Делаем мутации за оставшиеся гемы (с запасом на рефиллы)
+        7. Повторяем цикл или идем спать
         """
         # Получаем профиль пользователя
         profile = await self.get_profile()
@@ -1505,7 +1615,18 @@ class MutantGiftsBot(BaseBot):
         if settings.AUTO_UPGRADE:
             coins, characters = await self.auto_upgrade_pinned(characters, coins)
         
-        # ШАГ 2: Обычные бои (первые по приоритету)
+        # ШАГ 2: Обработка заданий (активностей) и получение наград - ПРИОРИТЕТ!
+        # Сначала получаем гемы из заданий, чтобы потом их можно было использовать для рефиллов
+        if has_claimable_activity:
+            logger.info(f"{self.session_name} | {self.EMOJI['activity']} Обрабатываем доступные задания")
+            await self.process_activities()
+            # Обновляем профиль после получения наград
+            updated_profile = await self.get_profile()
+            if updated_profile:
+                gems = updated_profile.get('gems', gems)
+                logger.info(f"{self.session_name} | {self.EMOJI['success']} Профиль обновлен после получения наград. Гемов: {gems}")
+
+        # ШАГ 3: Обычные бои (первые по приоритету)
         if settings.AUTO_BATTLE and unranked_energy > 0:
             logger.info(f"{self.session_name} | 🔄 Начинаем обычные бои")
             await self.process_battles(characters, "Unranked", unranked_energy)
@@ -1516,7 +1637,7 @@ class MutantGiftsBot(BaseBot):
                 unranked_energy = updated_profile.get('unranked_energy', 0)
                 ranked_energy = updated_profile.get('ranked_energy', 0)
             
-        # ШАГ 3: Рейтинговые бои
+        # ШАГ 4: Рейтинговые бои
         if settings.AUTO_BATTLE and ranked_energy > 0:
             logger.info(f"{self.session_name} | ⚔️ Начинаем рейтинговые бои")
             await self.process_battles(characters, "Ranked", ranked_energy)
@@ -1561,21 +1682,17 @@ class MutantGiftsBot(BaseBot):
                     if updated_profile_after_refill:
                         logger.info(f"{self.session_name} | {self.EMOJI['success']} Энергия восстановлена! Продолжаем бои.")
                         return  # Возвращаемся к началу цикла для новых боев
-        
-        # ШАГ 4: Обработка заданий (активностей) и получение наград
-        if has_claimable_activity:
-            logger.info(f"{self.session_name} | {self.EMOJI['activity']} Обрабатываем доступные задания")
-            await self.process_activities()
-            # Обновляем профиль после получения наград
-            updated_profile = await self.get_profile()
-            if updated_profile:
-                gems = updated_profile.get('gems', gems)
-                logger.info(f"{self.session_name} | {self.EMOJI['success']} Профиль обновлен после получения наград. Гемов: {gems}")
-        
 
         # ШАГ 5: Автоматическая мутация за гемы (только если остается запас гемов для следующего рефилла)
         if settings.AUTO_MUTATION:
-            mutation_price = self._get_mutation_gems_price(profile)
+            # Получаем актуальный профиль для точного расчета гемов
+            current_profile = await self.get_profile()
+            if current_profile:
+                gems = current_profile.get('gems', gems)
+                unranked_energy = current_profile.get('unranked_energy', unranked_energy)
+                ranked_energy = current_profile.get('ranked_energy', ranked_energy)
+            
+            mutation_price = self._get_mutation_gems_price(current_profile or profile)
 
             # --- NEW LOGIC: Calculate safety margin for next refill ---
             # Приоритет: сохраняем гемы на следующий рефилл для любого типа энергии, который сейчас равен 0,
@@ -1593,7 +1710,6 @@ class MutantGiftsBot(BaseBot):
                 # Берем максимальную стоимость из двух, чтобы покрыть наиболее дорогой необходимый рефилл.
                 safety_margin = max(safety_margin, next_unranked_cost)
 
-
             required_gems = mutation_price + safety_margin
 
             if mutation_price > 0 and gems >= required_gems:
@@ -1610,8 +1726,10 @@ class MutantGiftsBot(BaseBot):
                     gems = profile.get('gems', 0) if profile else 0
             else:
                 if settings.DEBUG_LOGGING or mutation_price > 0:
-                     if mutation_price > 0:
-                        logger.info(f"{self.session_name} | 🚫 Отмена мутации: {gems} гемов < {required_gems} (цена {mutation_price} + запас {safety_margin})")        # Получаем обновленный профиль после боев
+                    if mutation_price > 0:
+                        logger.info(f"{self.session_name} | 🚫 Отмена мутации: {gems} гемов < {required_gems} (цена {mutation_price} + запас {safety_margin})")
+        
+        # Получаем обновленный профиль после боев
         updated_profile = await self.get_profile()
         if updated_profile:
             unranked_energy = updated_profile.get('unranked_energy', 0)

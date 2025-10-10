@@ -1,7 +1,7 @@
 [project]
 name = "bot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Telegram bot for Mutant Gifts"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -37,9 +37,6 @@ dependencies = [
     "pyasn1==0.6.1",
     "pydantic-settings==2.4.0",
     "pyjsparser==2.7.1",
-    "pyqt5>=5.15.11",
-    "pyqt5-qt5>=5.15.17",
-    "pyqt5-sip>=12.17.0",
     "pyrogram==2.0.106",
     "pysocks==1.7.1",
     "pytest==7.4.4",
