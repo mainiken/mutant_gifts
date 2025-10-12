@@ -675,22 +675,22 @@ class MutantGiftsBot(BaseBot):
         
         current_gems = profile.get('gems', 0)
         
-        # Определяем количество уже сделанных восстановлений
+        # Обновляем стоимости рефилов из профиля API
+        self.session_manager.update_refill_costs_from_profile(profile)
+        
+        # Определяем количество уже сделанных восстановлений и получаем реальную стоимость
         if energy_type == "ranked":
             refills_made = self._stats['ranked_refills']
-            can_refill_key = 'refill_price_ranked_gems'  # Ключ из профиля
+            next_refill_cost = profile.get('refill_price_ranked_gems') or self.session_manager.get_next_ranked_refill_cost()
         else:
             refills_made = self._stats['unranked_refills']
-            can_refill_key = 'refill_price_unranked_gems'
+            next_refill_cost = profile.get('refill_price_unranked_gems') or self.session_manager.get_next_unranked_refill_cost()
         
         # Проверяем, можно ли делать восстановление
         if refills_made >= settings.MAX_ENERGY_REFILLS:
             if settings.DEBUG_LOGGING:
                 logger.debug(f"{self.session_name} | 🚫 Достигнут лимит восстановлений {energy_type} энергии: {refills_made}/{settings.MAX_ENERGY_REFILLS}")
             return False
-        
-        # Рассчитываем стоимость следующего восстановления
-        next_refill_cost = self.get_refill_cost(refills_made + 1)
         
         # Проверяем достаточно ли гемов
         if current_gems < next_refill_cost:
@@ -724,29 +724,34 @@ class MutantGiftsBot(BaseBot):
         if not settings.AUTO_REFILL_ENERGY:
             return False
             
+        # Обновляем стоимости рефилов из профиля API
+        self.session_manager.update_refill_costs_from_profile(profile)
+            
         current_gems = profile.get('gems', 0)
         refilled = False
         
         # Приоритет 1: Рейтинговые бои
         if ranked_energy == 0:
-            ranked_cost = self.session_manager.get_next_ranked_refill_cost()
-            if self.session_manager.can_afford_next_ranked_refill(current_gems):
+            ranked_cost = profile.get('refill_price_ranked_gems') or self.session_manager.get_next_ranked_refill_cost()
+            if current_gems >= ranked_cost:
                 logger.info(f"{self.session_name} | 💰 Попытка рефилла рейтинговой энергии за {ranked_cost} гемов")
                 if await self.refill_ranked_energy():
+                    self.session_manager.record_ranked_refill()
                     refilled = True
                     logger.info(f"{self.session_name} | ✅ Рейтинговая энергия восстановлена!")
                 else:
                     logger.warning(f"{self.session_name} | ⚠️ Не удалось восстановить рейтинговую энергию")
             else:
-                gems_needed = self.session_manager.get_gems_needed_for_next_ranked_refill(current_gems)
+                gems_needed = ranked_cost - current_gems
                 logger.info(f"{self.session_name} | 💸 Недостаточно гемов для рейтингового рефилла. Нужно: {gems_needed} гемов")
         
         # Приоритет 2: Обычные бои (только если ранговая энергия не нуждается в рефилле)
         if not refilled and unranked_energy == 0 and ranked_energy > 0:
-            unranked_cost = self.session_manager.get_next_unranked_refill_cost()
-            if self.session_manager.can_afford_next_unranked_refill(current_gems):
+            unranked_cost = profile.get('refill_price_unranked_gems') or self.session_manager.get_next_unranked_refill_cost()
+            if current_gems >= unranked_cost:
                 logger.info(f"{self.session_name} | 💰 Попытка рефилла обычной энергии за {unranked_cost} гемов")
                 if await self.refill_unranked_energy():
+                    self.session_manager.record_unranked_refill()
                     refilled = True
                     logger.info(f"{self.session_name} | ✅ Обычная энергия восстановлена!")
         

@@ -70,6 +70,21 @@ class SessionManager:
         """Возвращает стоимость следующего рефилла обычной энергии"""
         return self.data.get('next_unranked_refill_cost', 60)
     
+    def update_refill_costs_from_profile(self, profile: Dict) -> None:
+        """Обновляет стоимость рефилов из данных профиля API"""
+        ranked_cost = profile.get('refill_price_ranked_gems')
+        unranked_cost = profile.get('refill_price_unranked_gems')
+        
+        if ranked_cost is not None:
+            self.data['next_ranked_refill_cost'] = ranked_cost
+            
+        if unranked_cost is not None:
+            self.data['next_unranked_refill_cost'] = unranked_cost
+            
+        if ranked_cost is not None or unranked_cost is not None:
+            self.save_session_data()
+            logger.debug(f"{self.session_name} | Обновлены стоимости рефилов из API: ranked={ranked_cost}, unranked={unranked_cost}")
+    
     def record_ranked_refill(self) -> None:
         """Записывает выполненный рефилл рейтинговой энергии"""
         current_cost = self.get_next_ranked_refill_cost()
