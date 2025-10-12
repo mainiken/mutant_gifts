@@ -714,12 +714,12 @@ class MutantGiftsBot(BaseBot):
         return success
     
     async def smart_refill_strategy(self, profile: Dict, ranked_energy: int, unranked_energy: int) -> bool:
-        """Умная стратегия рефилла с приоритетом на рейтинговые бои
+        """Умная стратегия рефилла энергии с оптимизацией по стоимости
         
         Логика:
-        1. Приоритет на рейтинговые бои
-        2. Проверяем текущую стоимость рефилла
-        3. Рефиллим только если достаточно гемов
+        1. ВСЕГДА приоритет ранкед энергии над анранкед
+        2. Выбираем самый дешевый рефилл из доступных
+        3. Рефиллим по очереди: сначала самый дешевый, потом следующий по стоимости
         """
         if not settings.AUTO_REFILL_ENERGY:
             return False
@@ -728,34 +728,79 @@ class MutantGiftsBot(BaseBot):
         self.session_manager.update_refill_costs_from_profile(profile)
             
         current_gems = profile.get('gems', 0)
-        refilled = False
         
-        # Приоритет 1: Рейтинговые бои
-        if ranked_energy == 0:
-            ranked_cost = profile.get('refill_price_ranked_gems') or self.session_manager.get_next_ranked_refill_cost()
+        # Получаем актуальные стоимости рефиллов
+        ranked_cost = profile.get('refill_price_ranked_gems') or self.session_manager.get_next_ranked_refill_cost()
+        unranked_cost = profile.get('refill_price_unranked_gems') or self.session_manager.get_next_unranked_refill_cost()
+        
+        # Определяем какие типы энергии нуждаются в рефилле
+        needs_ranked_refill = ranked_energy == 0
+        needs_unranked_refill = unranked_energy == 0
+        
+        # Если ничего не нужно рефиллить
+        if not needs_ranked_refill and not needs_unranked_refill:
+            return False
+        
+        # СЛУЧАЙ 1: Оба типа энергии нуждаются в рефилле - выбираем самый дешевый
+        if needs_ranked_refill and needs_unranked_refill:
+            # Ранкед всегда имеет приоритет, но если он дороже и недоступен, пробуем анранкед
             if current_gems >= ranked_cost:
-                logger.info(f"{self.session_name} | 💰 Попытка рефилла рейтинговой энергии за {ranked_cost} гемов")
+                logger.info(f"{self.session_name} | 💰 Рефилл рейтинговой энергии за {ranked_cost} гемов (ПРИОРИТЕТ - оба типа нужны)")
                 if await self.refill_ranked_energy():
                     self.session_manager.record_ranked_refill()
-                    refilled = True
                     logger.info(f"{self.session_name} | ✅ Рейтинговая энергия восстановлена!")
+                    return True
                 else:
                     logger.warning(f"{self.session_name} | ⚠️ Не удалось восстановить рейтинговую энергию")
+                    return False
+            elif current_gems >= unranked_cost:
+                logger.info(f"{self.session_name} | 💰 Рефилл обычной энергии за {unranked_cost} гемов (ранкед недоступен)")
+                if await self.refill_unranked_energy():
+                    self.session_manager.record_unranked_refill()
+                    logger.info(f"{self.session_name} | ✅ Обычная энергия восстановлена!")
+                    return True
+                else:
+                    logger.warning(f"{self.session_name} | ⚠️ Не удалось восстановить обычную энергию")
+                    return False
+            else:
+                min_cost = min(ranked_cost, unranked_cost)
+                gems_needed = min_cost - current_gems
+                logger.info(f"{self.session_name} | 💸 Недостаточно гемов для любого рефилла. Нужно: {gems_needed} гемов")
+                return False
+        
+        # СЛУЧАЙ 2: Только ранкед нуждается в рефилле
+        elif needs_ranked_refill:
+            if current_gems >= ranked_cost:
+                logger.info(f"{self.session_name} | 💰 Рефилл рейтинговой энергии за {ranked_cost} гемов (ПРИОРИТЕТ)")
+                if await self.refill_ranked_energy():
+                    self.session_manager.record_ranked_refill()
+                    logger.info(f"{self.session_name} | ✅ Рейтинговая энергия восстановлена!")
+                    return True
+                else:
+                    logger.warning(f"{self.session_name} | ⚠️ Не удалось восстановить рейтинговую энергию")
+                    return False
             else:
                 gems_needed = ranked_cost - current_gems
                 logger.info(f"{self.session_name} | 💸 Недостаточно гемов для рейтингового рефилла. Нужно: {gems_needed} гемов")
+                return False
         
-        # Приоритет 2: Обычные бои (только если ранговая энергия не нуждается в рефилле)
-        if not refilled and unranked_energy == 0 and ranked_energy > 0:
-            unranked_cost = profile.get('refill_price_unranked_gems') or self.session_manager.get_next_unranked_refill_cost()
+        # СЛУЧАЙ 3: Только анранкед нуждается в рефилле
+        elif needs_unranked_refill:
             if current_gems >= unranked_cost:
-                logger.info(f"{self.session_name} | 💰 Попытка рефилла обычной энергии за {unranked_cost} гемов")
+                logger.info(f"{self.session_name} | 💰 Рефилл обычной энергии за {unranked_cost} гемов")
                 if await self.refill_unranked_energy():
                     self.session_manager.record_unranked_refill()
-                    refilled = True
                     logger.info(f"{self.session_name} | ✅ Обычная энергия восстановлена!")
+                    return True
+                else:
+                    logger.warning(f"{self.session_name} | ⚠️ Не удалось восстановить обычную энергию")
+                    return False
+            else:
+                gems_needed = unranked_cost - current_gems
+                logger.info(f"{self.session_name} | 💸 Недостаточно гемов для обычного рефилла. Нужно: {gems_needed} гемов")
+                return False
         
-        return refilled
+        return False
 
     async def perform_first_run_tutorial(self) -> None:
         """Прохождение первичного обучения при первом запуске сессии.
@@ -1505,6 +1550,26 @@ class MutantGiftsBot(BaseBot):
             logger.error(f"{self.session_name} | Ошибка получения награды за задание {activity_id}: {str(error)}")
             return False
     
+    async def claim_referrals_reward(self) -> bool:
+        """Получение награды гемов за рефералов"""
+        try:
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/profile/claim_referrals_reward"
+            )
+            
+            if response and response.get("success") is True:
+                logger.info(f"{self.session_name} | {self.EMOJI['success']} Награда за рефералов получена")
+                return True
+            else:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Не удалось получить награду за рефералов, response: {response}")
+                return False
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения награды за рефералов: {str(error)}")
+            return False
+    
     async def process_activities(self) -> None:
         """Обработка ежедневных заданий и получение наград"""
         activities = await self.get_activities()
@@ -1581,7 +1646,7 @@ class MutantGiftsBot(BaseBot):
         
         # Выводим статистику рефиллов на начало сессии
         session_stats = self.session_manager.get_session_stats()
-        logger.info(f"{self.session_name} | 📊 Статистика дня: R-рефиллы {session_stats['ranked_refills_today']}, U-рефиллы {session_stats['unranked_refills_today']}, потрачено {session_stats['total_gems_spent_today']} гемов")
+        logger.info(f"{self.session_name} | 📊 Статистика дня: потрачено {session_stats['total_gems_spent_today']} гемов")
         
         # Выводим компактную информацию о профиле
         logger.info(f"{self.session_name} | {self.EMOJI['character']} {username} | {self.EMOJI['energy']} {unranked_energy}({ranked_energy}) | 💰 {coins} | 💸 {gems}")
@@ -1631,6 +1696,15 @@ class MutantGiftsBot(BaseBot):
                 gems = updated_profile.get('gems', gems)
                 logger.info(f"{self.session_name} | {self.EMOJI['success']} Профиль обновлен после получения наград. Гемов: {gems}")
 
+        # ШАГ 2.1: Получение награды гемов за рефералов
+        logger.info(f"{self.session_name} | {self.EMOJI['activity']} Пытаемся получить награду за рефералов")
+        if await self.claim_referrals_reward():
+            # Обновляем профиль после получения награды за рефералов
+            updated_profile = await self.get_profile()
+            if updated_profile:
+                gems = updated_profile.get('gems', gems)
+                logger.info(f"{self.session_name} | {self.EMOJI['success']} Профиль обновлен после получения награды за рефералов. Гемов: {gems}")
+
         # ШАГ 3: Обычные бои (первые по приоритету)
         if settings.AUTO_BATTLE and unranked_energy > 0:
             logger.info(f"{self.session_name} | 🔄 Начинаем обычные бои")
@@ -1657,18 +1731,24 @@ class MutantGiftsBot(BaseBot):
             
             # После боев проверяем на восстановление энергии
             if settings.AUTO_REFILL_ENERGY:
+                # ВАЖНО: Получаем актуальный профиль для точного расчета гемов
+                current_profile_for_refill = await self.get_profile()
+                if not current_profile_for_refill:
+                    logger.warning(f"{self.session_name} | {self.EMOJI['warning']} Не удалось получить актуальный профиль для рефилла")
+                    current_profile_for_refill = updated_profile or profile
+                
                 energy_type = settings.REFILL_ENERGY_TYPE.lower()
                 refilled_any = False
                 
                 if energy_type == "both":
                     # Восстанавливаем оба типа энергии
                     if unranked_energy == 0:
-                        refill_success = await self.smart_energy_refill(profile, "unranked")
+                        refill_success = await self.smart_energy_refill(current_profile_for_refill, "unranked")
                         if refill_success:
                             refilled_any = True
                     
                     if ranked_energy == 0:
-                        refill_success = await self.smart_energy_refill(profile, "ranked")
+                        refill_success = await self.smart_energy_refill(current_profile_for_refill, "ranked")
                         if refill_success:
                             refilled_any = True
                             
@@ -1676,7 +1756,7 @@ class MutantGiftsBot(BaseBot):
                     # Проверяем текущую энергию после боев
                     current_energy = unranked_energy if energy_type == "unranked" else ranked_energy
                     if current_energy == 0:  # Восстанавливаем только если энергия кончилась
-                        refill_success = await self.smart_energy_refill(profile, energy_type)
+                        refill_success = await self.smart_energy_refill(current_profile_for_refill, energy_type)
                         if refill_success:
                             refilled_any = True
                             
@@ -1688,7 +1768,46 @@ class MutantGiftsBot(BaseBot):
                         logger.info(f"{self.session_name} | {self.EMOJI['success']} Энергия восстановлена! Продолжаем бои.")
                         return  # Возвращаемся к началу цикла для новых боев
 
-        # ШАГ 5: Автоматическая мутация за гемы (только если остается запас гемов для следующего рефилла)
+        # ШАГ 5: Дополнительная проверка рефилла перед мутацией (если энергия равна 0)
+        if settings.AUTO_REFILL_ENERGY:
+            # Получаем актуальный профиль
+            current_profile_check = await self.get_profile()
+            if current_profile_check:
+                current_unranked = current_profile_check.get('unranked_energy', 0)
+                current_ranked = current_profile_check.get('ranked_energy', 0)
+                
+                # Если любая энергия равна 0 - пытаемся рефилл
+                if current_unranked == 0 or current_ranked == 0:
+                    energy_type = settings.REFILL_ENERGY_TYPE.lower()
+                    refilled_any = False
+                    
+                    if energy_type == "both":
+                        if current_unranked == 0:
+                            refill_success = await self.smart_energy_refill(current_profile_check, "unranked")
+                            if refill_success:
+                                refilled_any = True
+                        
+                        if current_ranked == 0:
+                            refill_success = await self.smart_energy_refill(current_profile_check, "ranked")
+                            if refill_success:
+                                refilled_any = True
+                                
+                    elif energy_type == "unranked" and current_unranked == 0:
+                        refill_success = await self.smart_energy_refill(current_profile_check, "unranked")
+                        if refill_success:
+                            refilled_any = True
+                            
+                    elif energy_type == "ranked" and current_ranked == 0:
+                        refill_success = await self.smart_energy_refill(current_profile_check, "ranked")
+                        if refill_success:
+                            refilled_any = True
+                    
+                    # Если рефилл прошел успешно - возвращаемся к началу цикла
+                    if refilled_any:
+                        logger.info(f"{self.session_name} | {self.EMOJI['success']} Энергия восстановлена перед мутацией! Продолжаем бои.")
+                        return
+
+        # ШАГ 6: Автоматическая мутация за гемы (только если остается запас гемов для следующего рефилла)
         if settings.AUTO_MUTATION:
             # Получаем актуальный профиль для точного расчета гемов
             current_profile = await self.get_profile()
@@ -1746,7 +1865,7 @@ class MutantGiftsBot(BaseBot):
             logger.warning(f"{self.session_name} | {self.EMOJI['warning']} Не удалось получить обновленный профиль")
         
         # Логируем состояние энергии после боев
-        logger.info(f"{self.session_name} | {self.EMOJI['info']} Состояние после боев: обычная энергия {unranked_energy}, рейтинговая энергия {ranked_energy}")
+        logger.debug(f"{self.session_name} | {self.EMOJI['info']} Состояние после боев: обычная энергия {unranked_energy}, рейтинговая энергия {ranked_energy}")
         
         # Если есть любая энергия - продолжаем бои без сна
         if unranked_energy > 0 or ranked_energy > 0:

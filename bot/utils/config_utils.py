@@ -1,7 +1,7 @@
 import asyncio
 import json
 from bot.utils import logger, log_error, AsyncInterProcessLock
-from opentele.api import API
+# from opentele.api import API  # Временно отключено
 from os import path, remove
 from copy import deepcopy
 
@@ -83,22 +83,9 @@ def import_session_json(session_path: str) -> dict:
     return None
 
 
-def get_api(acc_api: dict) -> API:
-    api_generators = {
-        4: API.TelegramAndroid.Generate,
-        6: API.TelegramAndroid.Generate,
-        2040: API.TelegramDesktop.Generate,
-        10840: API.TelegramIOS.Generate,
-        21724: API.TelegramAndroidX.Generate
-    }
-    generate_api = api_generators.get(acc_api.get('api_id'), API.TelegramDesktop.Generate)
-    api = generate_api()
-    api.api_id = acc_api.get('api_id', api.api_id)
-    api.api_hash = acc_api.get('api_hash', api.api_hash)
-    api.device_model = acc_api.get('device_model', api.device_model)
-    api.system_version = acc_api.get('system_version', api.system_version)
-    api.app_version = acc_api.get('app_version', api.app_version)
-    api.system_lang_code = acc_api.get('system_lang_code', api.system_lang_code)
-    api.lang_code = acc_api.get('lang_code', api.lang_code)
-    api.lang_pack = acc_api.get('lang_pack', api.lang_pack)
-    return api
+def get_api(api_id: int, api_hash: str):
+    """
+    Временная заглушка для функции get_api
+    """
+    logger.warning("get_api временно отключена (opentele недоступен на Windows)")
+    return None

@@ -30,7 +30,7 @@ dependencies = [
     "markupsafe==3.0.2",
     "matplotlib==3.8.2",
     "multidict==6.1.0",
-    "opentele==1.15.1",
+    # "opentele==1.15.1",  # Временно отключено из-за проблем с PyQt5 на Windows
     "pandas==2.2.0",
     "propcache==0.2.0",
     "pyaes==1.6.1",

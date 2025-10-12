@@ -19,22 +19,13 @@ class SessionManager:
         os.makedirs("sessions", exist_ok=True)
     
     def _load_session_data(self) -> Dict:
-        """Загружает данные сессии из JSON файла"""
+        """Загружает данные сессии из файла"""
         if not os.path.exists(self.session_file):
             return self._create_default_session_data()
         
         try:
             with open(self.session_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                
-            # Проверяем, не новый ли день (рефиллы сбрасываются каждые 24 часа)
-            last_reset = datetime.fromisoformat(data.get('last_reset', '2000-01-01T00:00:00'))
-            now = datetime.now()
-            
-            if (now - last_reset).total_seconds() >= 86400:  # 24 часа
-                logger.info(f"{self.session_name} | 🔄 Новый день - сброс счетчиков рефиллов")
-                data = self._create_default_session_data()
-                
             return data
         except Exception as e:
             logger.error(f"{self.session_name} | Ошибка загрузки данных сессии: {e}")
@@ -43,13 +34,9 @@ class SessionManager:
     def _create_default_session_data(self) -> Dict:
         """Создает данные сессии по умолчанию"""
         return {
-            'last_reset': datetime.now().isoformat(),
-            'ranked_refills_today': 0,
-            'unranked_refills_today': 0,
             'next_ranked_refill_cost': 60,
             'next_unranked_refill_cost': 60,
             'total_gems_spent_today': 0,
-            'gems_needed_for_next_ranked_refill': 0,
             'last_activity_check': None,
             'can_mutate': True
         }
@@ -88,36 +75,16 @@ class SessionManager:
     def record_ranked_refill(self) -> None:
         """Записывает выполненный рефилл рейтинговой энергии"""
         current_cost = self.get_next_ranked_refill_cost()
-        self.data['ranked_refills_today'] += 1
         self.data['total_gems_spent_today'] += current_cost
-        
-        # Обновляем стоимость следующего рефилла
-        if self.data['ranked_refills_today'] == 1:
-            self.data['next_ranked_refill_cost'] = 120
-        elif self.data['ranked_refills_today'] == 2:
-            self.data['next_ranked_refill_cost'] = 240
-        else:
-            self.data['next_ranked_refill_cost'] = 240
-        
         self.save_session_data()
-        logger.info(f"{self.session_name} | 💰 Рефилл рейтинговой энергии: {current_cost} гемов. Следующий: {self.data['next_ranked_refill_cost']} гемов")
+        logger.info(f"{self.session_name} | 💰 Рефилл рейтинговой энергии: {current_cost} гемов")
     
     def record_unranked_refill(self) -> None:
         """Записывает выполненный рефилл обычной энергии"""
         current_cost = self.get_next_unranked_refill_cost()
-        self.data['unranked_refills_today'] += 1
         self.data['total_gems_spent_today'] += current_cost
-        
-        # Обновляем стоимость следующего рефилла
-        if self.data['unranked_refills_today'] == 1:
-            self.data['next_unranked_refill_cost'] = 120
-        elif self.data['unranked_refills_today'] == 2:
-            self.data['next_unranked_refill_cost'] = 240
-        else:
-            self.data['next_unranked_refill_cost'] = 240
-        
         self.save_session_data()
-        logger.info(f"{self.session_name} | 💰 Рефилл обычной энергии: {current_cost} гемов. Следующий: {self.data['next_unranked_refill_cost']} гемов")
+        logger.info(f"{self.session_name} | 💰 Рефилл обычной энергии: {current_cost} гемов")
     
     def can_afford_next_ranked_refill(self, current_gems: int) -> bool:
         """Проверяет, достаточно ли гемов для следующего рефилла рейтинговой энергии"""
@@ -149,10 +116,7 @@ class SessionManager:
     def get_session_stats(self) -> Dict:
         """Возвращает статистику сессии"""
         return {
-            'ranked_refills_today': self.data.get('ranked_refills_today', 0),
-            'unranked_refills_today': self.data.get('unranked_refills_today', 0),
             'total_gems_spent_today': self.data.get('total_gems_spent_today', 0),
             'next_ranked_refill_cost': self.get_next_ranked_refill_cost(),
-            'next_unranked_refill_cost': self.get_next_unranked_refill_cost(),
-            'last_reset': self.data.get('last_reset')
+            'next_unranked_refill_cost': self.get_next_unranked_refill_cost()
         }
