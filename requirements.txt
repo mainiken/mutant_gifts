@@ -27,9 +27,7 @@ pyaes==1.6.1
 pyasn1==0.6.1
 pydantic-settings==2.4.0
 pyjsparser==2.7.1
-PyQt5_sip
-PyQt5
-PyQt5-Qt5
+
 Pyrogram==2.0.106
 PySocks==1.7.1
 python-dotenv==1.0.1
