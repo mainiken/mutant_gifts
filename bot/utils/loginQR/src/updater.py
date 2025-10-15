@@ -17,7 +17,7 @@ async def raw_handler(client: Client, update: raw.base.Update, users: list, chat
                     api_id=APP_ID, api_hash=APP_HASH, except_ids=[]
                 )
             )
-        except errors.exceptions.unauthorized_401.SessionPasswordNeeded as err:
+        except errors.SessionPasswordNeeded as err:
             await client.check_password(await utils.ainput("2FA Password: ", hide=True))
             r = await client.invoke(
                 raw.functions.auth.ExportLoginToken(

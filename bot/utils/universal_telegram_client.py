@@ -8,7 +8,10 @@ from typing import Union, Optional
 import re
 
 from telethon import TelegramClient
-from telethon.errors import *
+from telethon.errors import (
+    FloodWaitError, UnauthorizedError, AuthKeyUnregisteredError,
+    UserDeactivatedError, UserDeactivatedBanError, PhoneNumberBannedError
+)
 from telethon.functions import messages, channels, account, folders
 from telethon.network import ConnectionTcpAbridged
 from telethon.types import InputBotAppShortName, InputPeerNotifySettings, InputNotifyPeer, InputUser
@@ -19,7 +22,12 @@ import pyrogram.raw.functions.channels as pchannels
 import pyrogram.raw.functions.messages as pmessages
 import pyrogram.raw.functions.folders as pfolders
 from pyrogram import Client as PyrogramClient
-from pyrogram.errors import *
+from pyrogram.errors import (
+    FloodWait, Unauthorized, AuthKeyUnregistered,
+    UserDeactivated, UserDeactivatedBan, PhoneNumberBanned,
+    UserAlreadyParticipant, UserBannedInChannel, 
+    UsernameNotOccupied, UsernameInvalid
+)
 from pyrogram.raw import types as ptypes
 
 from bot.config import settings

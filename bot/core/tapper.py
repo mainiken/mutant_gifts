@@ -1486,13 +1486,13 @@ class MutantGiftsBot(BaseBot):
         - Обычные бои: максимум 12, +1 каждые 2 часа.
         - Рейтинговые бои: максимум 6, +1 каждые 3 часа.
         Ждем 6 единиц любого типа энергии - какой накопится быстрее."""
-        import datetime
 
         # Если у нас уже есть 6+ энергии - просыпаемся сразу
         if unranked_energy >= 6 or ranked_energy >= 6:
             return 60  # Достаточно энергии - начинаем бои
 
-        now_ts = int(datetime.datetime.now().timestamp())
+        # Используем time() для получения текущего Unix timestamp
+        now_ts = int(time())
 
         def time_to_six_energy(current_energy: int, next_at: int, max_energy: int, interval_sec: int) -> int:
             target_energy = 6
@@ -1506,23 +1506,40 @@ class MutantGiftsBot(BaseBot):
                 
             needed_energy = actual_target - current_energy
             
-            # Время до ближайшего тика
+            # Время до ближайшего тика восстановления энергии
             if next_at and next_at > now_ts:
                 first_tick_time = next_at - now_ts
             else:
+                # Если время уже прошло или не задано, считаем что следующий тик через полный интервал
                 first_tick_time = interval_sec
                 
-            # Остальные тики
+            # Остальные тики (каждый последующий тик добавляет 1 энергию)
             remaining_ticks = max(0, needed_energy - 1)
             remaining_time = remaining_ticks * interval_sec
             
-            return first_tick_time + remaining_time
+            total_time = first_tick_time + remaining_time
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] time_to_six_energy: current={current_energy}, "
+                           f"target={target_energy}, needed={needed_energy}, "
+                           f"next_at={next_at}, now={now_ts}, "
+                           f"first_tick={first_tick_time}s, remaining_ticks={remaining_ticks}, "
+                           f"total_time={total_time}s ({total_time//60}m {total_time%60}s)")
+            
+            return total_time
 
         # Время до 6 единиц каждого типа
-        unranked_six_time = time_to_six_energy(unranked_energy, next_unranked_energy_at, 12, 2 * 3600)
-        ranked_six_time = time_to_six_energy(ranked_energy, next_ranked_energy_at, 6, 3 * 3600)
+        # Unranked: +1 каждый час (3600 сек), максимум 12
+        unranked_six_time = time_to_six_energy(unranked_energy, next_unranked_energy_at, 12, 3600)
+        # Ranked: +1 каждые 3 часа (10800 сек), максимум 6  
+        ranked_six_time = time_to_six_energy(ranked_energy, next_ranked_energy_at, 6, 10800)
 
-        # Просыпаемся когда любой тип достигнет 6 единиц
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] Energy calculation: "
+                       f"unranked={unranked_energy} (need {6-unranked_energy} more, {unranked_six_time}s), "
+                       f"ranked={ranked_energy} (need {6-ranked_energy} more, {ranked_six_time}s)")
+
+        # Просыпаемся когда любой тип достигнет 6 единиц (выбираем минимальное время)
         sleep_time = min(unranked_six_time, ranked_six_time) + 30  # небольшой буфер
         return max(300, sleep_time)  # Минимум 5 минут сна
     
