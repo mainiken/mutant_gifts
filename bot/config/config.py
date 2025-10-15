@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     AUTO_UPDATE: bool = True
     CHECK_UPDATE_INTERVAL: int = 60
     BLACKLISTED_SESSIONS: str = ""
+    
+    # Управление недействительными сессиями
+    MOVE_INVALID_SESSIONS_TO_ERROR: bool = True
+    TOKEN_LIFETIME_HOURS: int = 6  # Время жизни токена в часах
 
     # Автоматизация Mutant Gifts
     AUTO_MUTATION: bool = True
@@ -40,6 +44,9 @@ class Settings(BaseSettings):
     AUTO_REFILL_ENERGY: bool = True
     REFILL_ENERGY_TYPE: str = "ranked"  # "ranked", "unranked" или "both"
     MAX_ENERGY_REFILLS: int = 1  # Максимальное количество восстановлений
+    
+    # Настройки мутаций
+    MAX_MUTATIONS_PER_CYCLE: int = 0  # Максимальное количество мутаций за цикл (0 = без ограничений)
 
     @property
     def blacklisted_sessions(self) -> List[str]:

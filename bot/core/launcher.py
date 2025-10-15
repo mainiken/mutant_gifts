@@ -122,6 +122,10 @@ async def process() -> None:
             print("Program terminated.")
 
 async def move_invalid_session_to_error_folder(session_name: str) -> None:
+    if not settings.MOVE_INVALID_SESSIONS_TO_ERROR:
+        logger.info(f"Перемещение недействительных сессий отключено в конфиге. Сессия {session_name} не будет перемещена.")
+        return
+    
     error_dir = os.path.join(SESSIONS_PATH, "error")
     os.makedirs(error_dir, exist_ok=True)
     

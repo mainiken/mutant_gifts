@@ -175,13 +175,28 @@ class BaseBot:
                         return await response.json()
                     if response.status in (401, 502, 403, 418):
                         logger.warning(f"[{self.session_name}] Access token expired or server error, пытаюсь re-login...")
-                        tg_web_data = await self.get_tg_web_data()
-                        relogin = await self.login(tg_web_data)
-                        if relogin:
-                            logger.info(f"[{self.session_name}] Re-login успешен, повтор запроса...")
-                            continue
-                        logger.error(f"[{self.session_name}] Не удалось re-login, InvalidSession")
-                        raise InvalidSession("Access token expired and could not be refreshed")
+                        
+                        # Для MutantGiftsBot используем новую логику с проверкой времени жизни токена
+                        if hasattr(self, '_restart_authorization'):
+                            try:
+                                reauth_success = await self._restart_authorization()
+                                if reauth_success:
+                                    logger.info(f"[{self.session_name}] Re-authorization успешен, повтор запроса...")
+                                    continue
+                                logger.error(f"[{self.session_name}] Не удалось re-authorize, InvalidSession")
+                                raise InvalidSession("Access token expired and could not be refreshed")
+                            except Exception as e:
+                                logger.error(f"[{self.session_name}] Ошибка при re-authorization: {e}")
+                                raise InvalidSession("Access token expired and could not be refreshed")
+                        else:
+                            # Старая логика для других ботов
+                            tg_web_data = await self.get_tg_web_data()
+                            relogin = await self.login(tg_web_data)
+                            if relogin:
+                                logger.info(f"[{self.session_name}] Re-login успешен, повтор запроса...")
+                                continue
+                            logger.error(f"[{self.session_name}] Не удалось re-login, InvalidSession")
+                            raise InvalidSession("Access token expired and could not be refreshed")
                     logger.error(f"[{self.session_name}] Request failed with status {response.status}")
                     return None
             except Exception as e:
@@ -234,6 +249,7 @@ class MutantGiftsBot(BaseBot):
     def __init__(self, tg_client: UniversalTelegramClient):
         super().__init__(tg_client)
         self._jwt_token: Optional[str] = None
+        self._token_created_time: Optional[float] = None
         self._base_url: str = "https://mutant-gifts.xyz"
         self._session_cookies: Dict[str, str] = {}
         self._init_data: Optional[str] = None
@@ -253,9 +269,58 @@ class MutantGiftsBot(BaseBot):
             'battles_lost': 0,
             'unranked_refills': 0,
             'ranked_refills': 0,
-            'total_gems_spent_on_refills': 0
+            'total_gems_spent_on_refills': 0,
+            'mutations_performed': 0
         }
         
+    def _is_token_expired(self) -> bool:
+        """Проверяет, истек ли токен"""
+        if not self._token_created_time:
+            logger.debug(f"[{self.session_name}] Токен не создан, требуется авторизация")
+            return True
+        
+        token_lifetime_seconds = settings.TOKEN_LIFETIME_HOURS * 3600
+        token_age = time() - self._token_created_time
+        is_expired = token_age > token_lifetime_seconds
+        
+        if is_expired:
+            logger.warning(f"[{self.session_name}] {self.EMOJI['time']} Токен истек: возраст {token_age:.0f}с > лимит {token_lifetime_seconds}с")
+        else:
+            remaining_time = token_lifetime_seconds - token_age
+            logger.debug(f"[{self.session_name}] {self.EMOJI['time']} Токен действителен: осталось {remaining_time:.0f}с")
+        
+        return is_expired
+    
+    async def _restart_authorization(self) -> bool:
+        """Перезапускает авторизацию с получением новых init_data"""
+        try:
+            logger.info(f"[{self.session_name}] {self.EMOJI['warning']} Перезапуск авторизации...")
+            
+            # Получаем новые init_data
+            tg_web_data = await self.get_tg_web_data()
+            if not tg_web_data:
+                logger.error(f"[{self.session_name}] {self.EMOJI['error']} Не удалось получить новые init_data")
+                return False
+            
+            # Сбрасываем старый токен
+            logger.debug(f"[{self.session_name}] Сброс старого токена и cookies")
+            self._jwt_token = None
+            self._token_created_time = None
+            self._session_cookies.clear()
+            
+            # Выполняем новую авторизацию
+            auth_result = await self.authenticate(tg_web_data)
+            if auth_result:
+                logger.info(f"[{self.session_name}] {self.EMOJI['success']} Перезапуск авторизации успешен")
+            else:
+                logger.error(f"[{self.session_name}] {self.EMOJI['error']} Не удалось выполнить новую авторизацию")
+            
+            return auth_result
+            
+        except Exception as error:
+            logger.error(f"[{self.session_name}] {self.EMOJI['error']} Ошибка при перезапуске авторизации: {error}")
+            return False
+
     def get_mutant_gifts_headers(self) -> Dict[str, str]:
         """Заголовки для API Mutant Gifts"""
         from bot.core.headers import get_mutant_gifts_headers
@@ -289,7 +354,9 @@ class MutantGiftsBot(BaseBot):
                         resp_cookie = sess_resp.cookies.get('jwt') if sess_resp.cookies else None
                         if resp_cookie and resp_cookie.value:
                             self._jwt_token = resp_cookie.value
+                            self._token_created_time = time()
                             self._session_cookies['jwt'] = resp_cookie.value
+                            logger.info(f"[{self.session_name}] {self.EMOJI['success']} JWT токен получен из Set-Cookie, время жизни: {settings.TOKEN_LIFETIME_HOURS}ч")
                     # Проверим cookie_jar клиента на предмет jwt
                     if not self._jwt_token and hasattr(self._http_client, 'cookie_jar'):
                         try:
@@ -297,7 +364,9 @@ class MutantGiftsBot(BaseBot):
                             jar_jwt = jar_cookies.get('jwt') if jar_cookies else None
                             if jar_jwt and getattr(jar_jwt, 'value', None):
                                 self._jwt_token = jar_jwt.value
+                                self._token_created_time = time()
                                 self._session_cookies['jwt'] = jar_jwt.value
+                                logger.info(f"[{self.session_name}] {self.EMOJI['success']} JWT токен получен из cookie_jar, время жизни: {settings.TOKEN_LIFETIME_HOURS}ч")
                         except Exception as e:
                             if settings.DEBUG_LOGGING:
                                 logger.debug(f"[{self.session_name}] cookie_jar after /auth/session error: {e}")
@@ -330,7 +399,9 @@ class MutantGiftsBot(BaseBot):
                 resp_cookie = response.cookies.get('jwt') if response.cookies else None
                 if resp_cookie and resp_cookie.value:
                     self._jwt_token = resp_cookie.value
+                    self._token_created_time = time()
                     self._session_cookies['jwt'] = resp_cookie.value
+                    logger.info(f"[{self.session_name}] {self.EMOJI['success']} JWT токен получен из GET Set-Cookie, время жизни: {settings.TOKEN_LIFETIME_HOURS}ч")
                 
             # Если не нашли в самом ответе — пробуем получить из cookie_jar клиента
             if not self._jwt_token and hasattr(self._http_client, 'cookie_jar'):
@@ -339,7 +410,9 @@ class MutantGiftsBot(BaseBot):
                     jar_jwt = jar_cookies.get('jwt') if jar_cookies else None
                     if jar_jwt and getattr(jar_jwt, 'value', None):
                         self._jwt_token = jar_jwt.value
+                        self._token_created_time = time()
                         self._session_cookies['jwt'] = jar_jwt.value
+                        logger.info(f"[{self.session_name}] {self.EMOJI['success']} JWT токен получен из cookie_jar, время жизни: {settings.TOKEN_LIFETIME_HOURS}ч")
                 except Exception as e:
                     if settings.DEBUG_LOGGING:
                         logger.debug(f"[{self.session_name}] cookie_jar error: {e}")
@@ -380,7 +453,9 @@ class MutantGiftsBot(BaseBot):
                             )
                             if resp_cookie and resp_cookie.value:
                                 self._jwt_token = resp_cookie.value
+                                self._token_created_time = time()
                                 self._session_cookies['jwt'] = resp_cookie.value
+                                logger.info(f"[{self.session_name}] {self.EMOJI['success']} JWT токен получен из профиля Set-Cookie, время жизни: {settings.TOKEN_LIFETIME_HOURS}ч")
                                 break
                         # Проверяем cookie_jar после запроса профиля
                         if not self._jwt_token and hasattr(self._http_client, 'cookie_jar'):
@@ -388,7 +463,9 @@ class MutantGiftsBot(BaseBot):
                             jar_jwt = jar_cookies.get('jwt') if jar_cookies else None
                             if jar_jwt and getattr(jar_jwt, 'value', None):
                                 self._jwt_token = jar_jwt.value
+                                self._token_created_time = time()
                                 self._session_cookies['jwt'] = jar_jwt.value
+                                logger.info(f"[{self.session_name}] {self.EMOJI['success']} JWT токен получен из профиля cookie_jar, время жизни: {settings.TOKEN_LIFETIME_HOURS}ч")
                                 break
                     except Exception as e:
                         if settings.DEBUG_LOGGING:
@@ -466,13 +543,18 @@ class MutantGiftsBot(BaseBot):
                     
                     if response.status in (401, 403):
                         logger.warning(f"[{self.session_name}] JWT токен истек, пытаюсь re-authenticate...")
-                        tg_web_data = await self.get_tg_web_data()
-                        reauth = await self.authenticate(tg_web_data)
-                        if reauth:
-                            logger.info(f"[{self.session_name}] Re-authenticate успешен, повтор запроса...")
-                            continue
-                        logger.error(f"[{self.session_name}] Не удалось re-authenticate, InvalidSession")
-                        raise InvalidSession("JWT token expired and could not be refreshed")
+                        
+                        # Используем новую логику с проверкой времени жизни токена
+                        try:
+                            reauth_success = await self._restart_authorization()
+                            if reauth_success:
+                                logger.info(f"[{self.session_name}] Re-authorization успешен, повтор запроса...")
+                                continue
+                            logger.error(f"[{self.session_name}] Не удалось re-authorize, InvalidSession")
+                            raise InvalidSession("JWT token expired and could not be refreshed")
+                        except Exception as e:
+                            logger.error(f"[{self.session_name}] Ошибка при re-authorization: {e}")
+                            raise InvalidSession("JWT token expired and could not be refreshed")
                     
                     logger.error(f"[{self.session_name}] Request failed with status {response.status}")
                     return None
@@ -1625,6 +1707,17 @@ class MutantGiftsBot(BaseBot):
         6. Делаем мутации за оставшиеся гемы (с запасом на рефиллы)
         7. Повторяем цикл или идем спать
         """
+        # Сбрасываем счетчик мутаций в начале нового цикла
+        self._stats['mutations_performed'] = 0
+        
+        # Проверяем время жизни токена и перезапускаем авторизацию при необходимости
+        if self._is_token_expired():
+            logger.info(f"{self.session_name} | {self.EMOJI['warning']} Токен истек, перезапускаем авторизацию...")
+            if not await self._restart_authorization():
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось перезапустить авторизацию")
+                await asyncio.sleep(300)  # Ждем 5 минут перед повторной попыткой
+                return
+        
         # Получаем профиль пользователя
         profile = await self.get_profile()
         
@@ -1809,49 +1902,55 @@ class MutantGiftsBot(BaseBot):
 
         # ШАГ 6: Автоматическая мутация за гемы (только если остается запас гемов для следующего рефилла)
         if settings.AUTO_MUTATION:
-            # Получаем актуальный профиль для точного расчета гемов
-            current_profile = await self.get_profile()
-            if current_profile:
-                gems = current_profile.get('gems', gems)
-                unranked_energy = current_profile.get('unranked_energy', unranked_energy)
-                ranked_energy = current_profile.get('ranked_energy', ranked_energy)
-            
-            mutation_price = self._get_mutation_gems_price(current_profile or profile)
-
-            # --- NEW LOGIC: Calculate safety margin for next refill ---
-            # Приоритет: сохраняем гемы на следующий рефилл для любого типа энергии, который сейчас равен 0,
-            # до достижения лимита settings.MAX_ENERGY_REFILLS.
-            safety_margin = 0
-
-            # 1. Safety for Ranked Refill
-            if ranked_energy == 0 and self._stats['ranked_refills'] < settings.MAX_ENERGY_REFILLS:
-                next_ranked_cost = self.get_refill_cost(self._stats['ranked_refills'] + 1)
-                safety_margin = max(safety_margin, next_ranked_cost)
-
-            # 2. Safety for Unranked Refill
-            if unranked_energy == 0 and self._stats['unranked_refills'] < settings.MAX_ENERGY_REFILLS:
-                next_unranked_cost = self.get_refill_cost(self._stats['unranked_refills'] + 1)
-                # Берем максимальную стоимость из двух, чтобы покрыть наиболее дорогой необходимый рефилл.
-                safety_margin = max(safety_margin, next_unranked_cost)
-
-            required_gems = mutation_price + safety_margin
-
-            if mutation_price > 0 and gems >= required_gems:
-                logger.info(f"{self.session_name} | 🧬 Выполняем мутацию за {mutation_price} гемов. Запас на рефилл: {safety_margin} гемов")
-                mutation_result = await self.mutate_gems()
-                if mutation_result:
-                    char_name = mutation_result.get('name', 'Unknown')
-                    char_rarity = mutation_result.get('rarity', 'Unknown')
-                    logger.info(f"{self.session_name} | 🎉 Получен персонаж: {char_name} ({char_rarity})")
-                    # Обновляем список персонажей
-                    characters = await self.get_characters() or characters
-                    # Обновляем профиль после мутации
-                    profile = await self.get_profile() or profile
-                    gems = profile.get('gems', 0) if profile else 0
+            # Проверяем ограничение на количество мутаций за цикл
+            if settings.MAX_MUTATIONS_PER_CYCLE > 0 and self._stats['mutations_performed'] >= settings.MAX_MUTATIONS_PER_CYCLE:
+                logger.info(f"{self.session_name} | 🚫 Достигнут лимит мутаций за цикл: {self._stats['mutations_performed']}/{settings.MAX_MUTATIONS_PER_CYCLE}")
             else:
-                if settings.DEBUG_LOGGING or mutation_price > 0:
-                    if mutation_price > 0:
-                        logger.info(f"{self.session_name} | 🚫 Отмена мутации: {gems} гемов < {required_gems} (цена {mutation_price} + запас {safety_margin})")
+                # Получаем актуальный профиль для точного расчета гемов
+                current_profile = await self.get_profile()
+                if current_profile:
+                    gems = current_profile.get('gems', gems)
+                    unranked_energy = current_profile.get('unranked_energy', unranked_energy)
+                    ranked_energy = current_profile.get('ranked_energy', ranked_energy)
+                
+                mutation_price = self._get_mutation_gems_price(current_profile or profile)
+
+                # --- NEW LOGIC: Calculate safety margin for next refill ---
+                # Приоритет: сохраняем гемы на следующий рефилл для любого типа энергии, который сейчас равен 0,
+                # до достижения лимита settings.MAX_ENERGY_REFILLS.
+                safety_margin = 0
+
+                # 1. Safety for Ranked Refill
+                if ranked_energy == 0 and self._stats['ranked_refills'] < settings.MAX_ENERGY_REFILLS:
+                    next_ranked_cost = self.get_refill_cost(self._stats['ranked_refills'] + 1)
+                    safety_margin = max(safety_margin, next_ranked_cost)
+
+                # 2. Safety for Unranked Refill
+                if unranked_energy == 0 and self._stats['unranked_refills'] < settings.MAX_ENERGY_REFILLS:
+                    next_unranked_cost = self.get_refill_cost(self._stats['unranked_refills'] + 1)
+                    # Берем максимальную стоимость из двух, чтобы покрыть наиболее дорогой необходимый рефилл.
+                    safety_margin = max(safety_margin, next_unranked_cost)
+
+                required_gems = mutation_price + safety_margin
+
+                if mutation_price > 0 and gems >= required_gems:
+                    remaining_mutations = settings.MAX_MUTATIONS_PER_CYCLE - self._stats['mutations_performed'] if settings.MAX_MUTATIONS_PER_CYCLE > 0 else "∞"
+                    logger.info(f"{self.session_name} | 🧬 Выполняем мутацию за {mutation_price} гемов. Запас на рефилл: {safety_margin} гемов. Осталось мутаций: {remaining_mutations}")
+                    mutation_result = await self.mutate_gems()
+                    if mutation_result:
+                        self._stats['mutations_performed'] += 1
+                        char_name = mutation_result.get('name', 'Unknown')
+                        char_rarity = mutation_result.get('rarity', 'Unknown')
+                        logger.info(f"{self.session_name} | 🎉 Получен персонаж: {char_name} ({char_rarity}). Мутаций выполнено: {self._stats['mutations_performed']}")
+                        # Обновляем список персонажей
+                        characters = await self.get_characters() or characters
+                        # Обновляем профиль после мутации
+                        profile = await self.get_profile() or profile
+                        gems = profile.get('gems', 0) if profile else 0
+                else:
+                    if settings.DEBUG_LOGGING or mutation_price > 0:
+                        if mutation_price > 0:
+                            logger.info(f"{self.session_name} | 🚫 Отмена мутации: {gems} гемов < {required_gems} (цена {mutation_price} + запас {safety_margin})")
         
         # Получаем обновленный профиль после боев
         updated_profile = await self.get_profile()
