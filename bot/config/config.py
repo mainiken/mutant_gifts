@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # Настройки восстановления энергии
     AUTO_REFILL_ENERGY: bool = True
     REFILL_ENERGY_TYPE: str = "ranked"  # "ranked", "unranked" или "both"
-    MAX_ENERGY_REFILLS: int = 1  # Максимальное количество восстановлений
+    MAX_ENERGY_REFILLS: int = 3  # Максимальное количество восстановлений
     
     # Настройки мутаций
     MAX_MUTATIONS_PER_CYCLE: int = 0  # Максимальное количество мутаций за цикл (0 = без ограничений)
