@@ -555,6 +555,10 @@ class MutantGiftsBot(BaseBot):
                             logger.error(f"[{self.session_name}] Ошибка при re-authorization: {e}")
                             raise InvalidSession("JWT token expired and could not be refreshed")
                     
+                    if response.status == 422:
+                        logger.warning(f"[{self.session_name}] Ошибка валидации (422) - возможно недостаточно средств или персонаж на максимальном уровне")
+                        return None
+                    
                     logger.error(f"[{self.session_name}] Request failed with status {response.status}")
                     return None
                     
@@ -1181,11 +1185,12 @@ class MutantGiftsBot(BaseBot):
         
         return remaining_characters
 
-    def select_best_character_for_upgrade(self, pinned_characters: List[Dict]) -> Optional[Dict]:
-        """Выбор лучшего персонажа для прокачки на основе приоритета pin_index и соотношения цена/эффективность
+    def select_best_character_for_upgrade(self, pinned_characters: List[Dict], available_coins: int = 0) -> Optional[Dict]:
+        """Выбор лучшего персонажа для прокачки на основе приоритета pin_index и доступного баланса
         
         Args:
             pinned_characters: Список закрепленных персонажей
+            available_coins: Доступное количество монет для прокачки
         
         Returns:
             Optional[Dict]: Лучший персонаж для прокачки или None
@@ -1221,6 +1226,13 @@ class MutantGiftsBot(BaseBot):
             # Рассчитываем стоимость следующего уровня
             next_level_cost = self.calculate_level_up_cost(current_level, rarity)
             
+            # Проверяем, хватает ли денег с учетом минимального баланса
+            if available_coins > 0 and not self.can_afford_next_level(current_level, available_coins, rarity, settings.MIN_COINS_BALANCE):
+                if settings.DEBUG_LOGGING:
+                    char_name = char.get('name', 'Unknown')
+                    logger.debug(f"{self.session_name} | 💰 {char_name} (pin #{char.get('pin_index')}) слишком дорог: {next_level_cost} > {available_coins - settings.MIN_COINS_BALANCE}")
+                continue
+            
             if settings.DEBUG_LOGGING:
                 char_name = char.get('name', 'Unknown')
                 logger.debug(f"{self.session_name} | 🎯 {char_name} (pin #{char.get('pin_index')}): уровень {current_level} -> {current_level + 1}, стоимость: {next_level_cost}")
@@ -1228,7 +1240,7 @@ class MutantGiftsBot(BaseBot):
             # Возвращаем первого доступного персонажа по приоритету
             return char
         
-        # Если дошли до сюда, значит все персонажи заблокированы
+        # Если дошли до сюда, значит все персонажи заблокированы или слишком дороги
         return None
     
     async def auto_upgrade_pinned(self, pinned_characters: List[Dict], coins: int) -> Tuple[int, List[Dict]]:
@@ -1258,13 +1270,13 @@ class MutantGiftsBot(BaseBot):
         logger.debug(f"{self.session_name} | 🚀 Начинаем упрощенную прокачку (по 1 уровню). Монет: {current_coins}")
         
         while True:
-            # Выбираем лучшего персонажа для прокачки
-            best_char = self.select_best_character_for_upgrade(updated_characters)
+            # Выбираем лучшего персонажа для прокачки с учетом текущего баланса
+            best_char = self.select_best_character_for_upgrade(updated_characters, current_coins)
             if not best_char:
                 if consecutive_failures > 0:
                     logger.debug(f"{self.session_name} | ⚠️ Нет доступных персонажей для прокачки (заблокированы после ошибок)")
                 else:
-                    logger.info(f"{self.session_name} | ⚠️ Нет подходящих персонажей для прокачки")
+                    logger.info(f"{self.session_name} | ⚠️ Нет подходящих персонажей для прокачки или недостаточно средств")
                 break
             
             char_id = best_char.get('id')
@@ -1275,11 +1287,6 @@ class MutantGiftsBot(BaseBot):
             
             # Рассчитываем стоимость следующего уровня
             next_level_cost = self.calculate_level_up_cost(current_level, rarity)
-            
-            # Проверяем, хватает ли денег (с учетом минимального баланса)
-            if current_coins - next_level_cost < settings.MIN_COINS_BALANCE:
-                logger.info(f"{self.session_name} | 💰 Недостаточно монет для прокачки {char_name}. Нужно: {next_level_cost}, доступно: {current_coins - settings.MIN_COINS_BALANCE}")
-                break
             
             # Прокачиваем на 1 уровень
             target_level = current_level + 1
