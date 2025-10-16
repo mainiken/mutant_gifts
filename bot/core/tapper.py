@@ -1846,7 +1846,9 @@ class MutantGiftsBot(BaseBot):
             logger.info(f"{self.session_name} | {self.EMOJI['character']} Закреплено персонажей: {len(pinned_characters)}")
         
         # Авто-распыление ненужных карт
-        await self.auto_disenchant_low_rarity()
+        all_characters = await self.get_characters()
+        if all_characters:
+            await self.auto_disenchant_low_rarity(all_characters)
         
         # Авто-мутация: пока хватает гемов и включено
         mutation_price_gems = self._get_mutation_gems_price(profile)
