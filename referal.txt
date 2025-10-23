@@ -1,0 +1,19 @@
+fetch("https://mutant-gifts.xyz/apiv1/profile/claim_referrals_reward", {
+  "headers": {
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "ru,en;q=0.9,en-GB;q=0.8,en-US;q=0.7",
+    "sec-ch-ua": "\"Microsoft Edge WebView2\";v=\"141\", \"Chromium\";v=\"141\", \"Microsoft Edge\";v=\"141\", \"Not?A_Brand\";v=\"8\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin"
+  },
+  "referrer": "https://mutant-gifts.xyz/",
+  "body": null,
+  "method": "POST",
+  "mode": "cors",
+  "credentials": "include"
+});
+
+{"success":true}

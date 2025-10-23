@@ -1740,7 +1740,7 @@ class MutantGiftsBot(BaseBot):
             # Выполняем запрос на получение реферальных гемов
             response = await self.make_mutant_request(
                 method="POST",
-                url=f"{self._base_url}/apiv1/profile/claim_referral_gems"
+                url=f"{self._base_url}/apiv1/profile/claim_referrals_reward"
             )
             
             if response and response.get("success") is True:
@@ -2009,47 +2009,6 @@ class MutantGiftsBot(BaseBot):
         if all_characters:
             all_characters = await self.auto_disenchant_low_rarity(all_characters)
         
-        # Авто-мутация: пока хватает гемов и включено
-        mutation_price_gems = self._get_mutation_gems_price(profile)
-        if settings.AUTO_MUTATION and isinstance(gems, int) and gems >= max(1, mutation_price_gems or 100):
-            logger.info(f"{self.session_name} | 🧬 Начинаем авто-мутацию. Гемов: {gems}")
-            mutations_count = 0
-            while True:
-                mutation_price = self._get_mutation_gems_price(profile) or 100
-                if not isinstance(gems, int) or gems < mutation_price:
-                    break
-                new_char = await self.mutate_gems()
-                if not new_char:
-                    break
-                mutations_count += 1
-                gems -= mutation_price
-                char_name = new_char.get('name', 'Unknown')
-                char_rarity = new_char.get('rarity', 'Unknown')
-                logger.info(f"{self.session_name} | 🏠 Мутация #{mutations_count}: {char_name} ({char_rarity})")
-                # Обновляем профиль для получения обновленных pinned_characters
-                updated_profile = await self.get_profile()
-                if updated_profile:
-                    profile = updated_profile
-                    pinned_characters = profile.get('pinned_characters', [])
-                await asyncio.sleep(1)
-            
-            if mutations_count > 0:
-                logger.info(f"{self.session_name} | ✨ Выполнено {mutations_count} мутаций! Осталось гемов: {gems}")
-                
-                # После мутаций перезакрепляем лучшие карты
-                all_characters = await self.get_characters()
-                if all_characters:
-                    best_pinned_ids = await self.ensure_best_pins(all_characters)
-                    logger.info(f"{self.session_name} | {self.EMOJI['character']} Перезакреплены лучшие карты после мутаций: {len(best_pinned_ids)}")
-                    
-                    # Распыляем ненужные карты после мутаций
-                    all_characters = await self.auto_disenchant_low_rarity(all_characters)
-                    
-                    # Обновляем профиль после изменений
-                    profile = await self.get_profile()
-                    if profile:
-                        pinned_characters = profile.get('pinned_characters', [])
-
         # Авто-улучшение: только закрепленных карт, при балансе выше MIN_COINS_BALANCE
         if settings.AUTO_UPGRADE and pinned_characters:
             updated_coins, updated_characters = await self.auto_upgrade_pinned(pinned_characters, coins)
@@ -2180,19 +2139,50 @@ class MutantGiftsBot(BaseBot):
                 required_gems = mutation_price + safety_margin
 
                 if mutation_price > 0 and gems >= required_gems:
-                    remaining_mutations = settings.MAX_MUTATIONS_PER_CYCLE - self._stats['mutations_performed'] if settings.MAX_MUTATIONS_PER_CYCLE > 0 else "∞"
-                    logger.info(f"{self.session_name} | 🧬 Выполняем мутацию за {mutation_price} гемов. Запас на рефилл: {safety_margin} гемов. Осталось мутаций: {remaining_mutations}")
-                    mutation_result = await self.mutate_gems()
-                    if mutation_result:
+                    logger.info(f"{self.session_name} | 🧬 Начинаем мутации. Гемов: {gems}, запас на рефилл: {safety_margin}")
+                    mutations_count = 0
+                    
+                    # Цикл мутаций с учетом запаса на рефилл
+                    while True:
+                        # Проверяем лимит мутаций за цикл
+                        if settings.MAX_MUTATIONS_PER_CYCLE > 0 and self._stats['mutations_performed'] >= settings.MAX_MUTATIONS_PER_CYCLE:
+                            logger.info(f"{self.session_name} | 🚫 Достигнут лимит мутаций: {self._stats['mutations_performed']}/{settings.MAX_MUTATIONS_PER_CYCLE}")
+                            break
+                        
+                        # Обновляем цену и гемы
+                        mutation_price = self._get_mutation_gems_price(current_profile or profile)
+                        if not isinstance(gems, int) or gems < mutation_price + safety_margin:
+                            break
+                        
+                        mutation_result = await self.mutate_gems()
+                        if not mutation_result:
+                            break
+                        
+                        mutations_count += 1
                         self._stats['mutations_performed'] += 1
+                        gems -= mutation_price
+                        
                         char_name = mutation_result.get('name', 'Unknown')
                         char_rarity = mutation_result.get('rarity', 'Unknown')
-                        logger.info(f"{self.session_name} | 🎉 Получен персонаж: {char_name} ({char_rarity}). Мутаций выполнено: {self._stats['mutations_performed']}")
-                        # Обновляем список персонажей
-                        characters = await self.get_characters() or characters
-                        # Обновляем профиль после мутации
-                        profile = await self.get_profile() or profile
-                        gems = profile.get('gems', 0) if profile else 0
+                        logger.info(f"{self.session_name} | 🏠 Мутация #{mutations_count}: {char_name} ({char_rarity})")
+                        
+                        # Обновляем профиль
+                        profile = await self.get_profile()
+                        if profile:
+                            gems = profile.get('gems', 0)
+                        await asyncio.sleep(1)
+                    
+                    if mutations_count > 0:
+                        logger.info(f"{self.session_name} | ✨ Выполнено {mutations_count} мутаций! Осталось гемов: {gems}")
+                        
+                        # После мутаций перезакрепляем лучшие карты
+                        all_characters = await self.get_characters()
+                        if all_characters:
+                            best_pinned_ids = await self.ensure_best_pins(all_characters)
+                            logger.info(f"{self.session_name} | {self.EMOJI['character']} Перезакреплены лучшие карты после мутаций: {len(best_pinned_ids)}")
+                            
+                            # Распыляем ненужные карты после мутаций
+                            all_characters = await self.auto_disenchant_low_rarity(all_characters)
                 else:
                     if settings.DEBUG_LOGGING or mutation_price > 0:
                         if mutation_price > 0:
