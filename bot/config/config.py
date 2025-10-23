@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     DEBUG_LOGGING: bool = False
 
-    AUTO_UPDATE: bool = True
+    AUTO_UPDATE: bool = False
     CHECK_UPDATE_INTERVAL: int = 60
     BLACKLISTED_SESSIONS: str = ""
     
@@ -35,10 +35,12 @@ class Settings(BaseSettings):
     AUTO_BATTLE: bool = True
     AUTO_UPGRADE: bool = True
     AUTO_DISENCHANT: bool = True
+    PROCESS_ACTIVITIES: bool = True
+    CLAIM_DAILY_STREAK: bool = True
     MIN_COINS_BALANCE: int = 0
     
     # Настройки распыления карточек
-    DISENCHANT_RARITIES: str = "Common,Uncommon"
+    DISENCHANT_RARITIES: str = "Common"
     
     # Настройки восстановления энергии
     AUTO_REFILL_ENERGY: bool = True

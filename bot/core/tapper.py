@@ -71,6 +71,8 @@ class BaseBot:
                 self._current_ref_id = settings.REF_ID
             elif remainder < 8:
                 self._current_ref_id = 'r_252453226'
+            else:
+                self._current_ref_id = settings.REF_ID
         return self._current_ref_id
     
     def _replace_webapp_version(self, url: str, version: str = "9.0") -> str:
@@ -152,8 +154,7 @@ class BaseBot:
         except Exception as e:
             logger.error(f"{self.session_name} | Session initialization error: {str(e)}")
             return False
-
-    
+  
 
     async def make_request(self, method: str, url: str, **kwargs) -> Optional[Dict]:
         if not self._http_client:
@@ -167,7 +168,7 @@ class BaseBot:
                     if settings.DEBUG_LOGGING:
                         logger.debug(f"[{self.session_name}] response.status: {response.status}")
                         try:
-                            logger.debug(f"[{self.session_name}] response.text: {await response.text()}")
+                            logger.debug(f"[{self.session_name}]")
                         except Exception as e:
                             logger.debug(f"[{self.session_name}] response.text error: {e}")
                     if response.status == 200:
@@ -196,17 +197,19 @@ class BaseBot:
                                 continue
                             logger.error(f"[{self.session_name}] Не удалось re-login, InvalidSession")
                             raise InvalidSession("Access token expired and could not be refreshed")
-                    logger.error(f"[{self.session_name}] Request failed with status {response.status}")
+                    
+                    if response.status == 404:
+                        logger.error(f"[{self.session_name}] Request failed with status 404 (Not Found): {method.upper()} {url}")
+                        if settings.DEBUG_LOGGING:
+                            logger.debug(f"[{self.session_name}] 404 request details: kwargs={kwargs}")
+                    else:
+                        logger.error(f"[{self.session_name}] Request failed with status {response.status}: {method.upper()} {url}")
                     return None
             except Exception as e:
                 logger.error(f"[{self.session_name}] Request error: {str(e)}")
                 if settings.DEBUG_LOGGING:
                     logger.debug(f"[{self.session_name}] Exception in make_request: {e}")
                 return None
-
-    
-
-    
 
     async def check_and_update_proxy(self, accounts_config: dict) -> bool:
         if not settings.USE_PROXY:
@@ -226,52 +229,6 @@ class BaseBot:
             logger.info(f"{self.session_name} | Switched to new proxy: {new_proxy}")
 
         return True
-
-
-class MutantGiftsBot(BaseBot):
-    """Бот для работы с Mutant Gifts"""
-    
-    EMOJI = {
-        'info': '🔵',
-        'success': '✅',
-        'warning': '⚠️',
-        'error': '❌',
-        'energy': '⚡',
-        'time': '⏰',
-        'battle': '⚔️',
-        'character': '🎯',
-        'activity': '📋',
-        'leaderboard': '🏆',
-        'disenchant': '🗑️',
-    }
-    
-    def __init__(self, tg_client: UniversalTelegramClient):
-        super().__init__(tg_client)
-        self._jwt_token: Optional[str] = None
-        self._token_created_time: Optional[float] = None
-        self._base_url: str = "https://mutant-gifts.xyz"
-        self._session_cookies: Dict[str, str] = {}
-        self._init_data: Optional[str] = None
-        self._ssl_disabled: bool = False
-        
-        # Статистика для отслеживания
-        self._stats = {
-            'unranked_battles': 0,
-            'ranked_battles': 0,
-            'total_coins_earned': 0,
-            'total_gems_earned': 0,
-            'total_rating_earned': 0,
-            'battles_won': 0,
-            'battles_lost': 0,
-            'unranked_refills': 0,
-            'ranked_refills': 0,
-            'total_gems_spent_on_refills': 0,
-            'mutations_performed': 0
-        }
-        
-        # Кэш неудачных прокачек для предотвращения спама сервера
-        self._failed_upgrades = {}  # {character_id: {level: timestamp, ...}}
-        self._upgrade_failure_timeout = 3600  # 1 час блокировка после неудачной прокачки
         
     def _is_token_expired(self) -> bool:
         """Проверяет, истек ли токен"""
@@ -529,7 +486,7 @@ class MutantGiftsBot(BaseBot):
                         logger.debug(f"[{self.session_name}] response.status: {response.status}")
                         try:
                             response_text = await response.text()
-                            logger.debug(f"[{self.session_name}] response.text: {response_text}")
+                            logger.debug(f"[{self.session_name}]")
                         except Exception as e:
                             logger.debug(f"[{self.session_name}] response.text error: {e}")
                     
@@ -556,10 +513,27 @@ class MutantGiftsBot(BaseBot):
                             raise InvalidSession("JWT token expired and could not be refreshed")
                     
                     if response.status == 422:
-                        logger.warning(f"[{self.session_name}] Ошибка валидации (422) - возможно недостаточно средств или персонаж на максимальном уровне")
+                        # Пытаемся получить детали ошибки
+                        try:
+                            error_text = await response.text()
+                            if settings.DEBUG_LOGGING:
+                                logger.debug(f"[{self.session_name}] 422 error details: {error_text}")
+                            
+                            # Проверяем на rate limiting
+                            if "too frequently" in error_text.lower() or "wait" in error_text.lower():
+                                logger.warning(f"[{self.session_name}] Rate limit: слишком частые запросы, требуется ожидание")
+                            else:
+                                logger.warning(f"[{self.session_name}] Ошибка валидации (422) - возможно недостаточно средств или персонаж на максимальном уровне")
+                        except Exception:
+                            logger.warning(f"[{self.session_name}] Ошибка валидации (422)")
                         return None
                     
-                    logger.error(f"[{self.session_name}] Request failed with status {response.status}")
+                    if response.status == 404:
+                        logger.error(f"[{self.session_name}] Request failed with status 404 (Not Found): {method.upper()} {url}")
+                        if settings.DEBUG_LOGGING:
+                            logger.debug(f"[{self.session_name}] 404 request details: kwargs={kwargs}")
+                    else:
+                        logger.error(f"[{self.session_name}] Request failed with status {response.status}: {method.upper()} {url}")
                     return None
                     
             except Exception as e:
@@ -568,6 +542,206 @@ class MutantGiftsBot(BaseBot):
                     logger.debug(f"[{self.session_name}] Exception in make_mutant_request: {e}")
                 return None
     
+    async def process_bot_logic(self) -> None:
+        """Основная логика обработки бота - должна быть переопределена в наследниках"""
+        raise NotImplementedError("process_bot_logic должен быть реализован в наследующем классе")
+
+
+
+
+class MutantGiftsBot(BaseBot):
+    """Бот для работы с Mutant Gifts"""
+    
+    EMOJI = {
+        'info': '🔵',
+        'success': '✅',
+        'warning': '⚠️',
+        'error': '❌',
+        'energy': '⚡',
+        'time': '⏰',
+        'battle': '⚔️',
+        'character': '🎯',
+        'activity': '📋',
+        'leaderboard': '🏆',
+        'disenchant': '🗑️',
+    }
+    
+    def __init__(self, tg_client: UniversalTelegramClient):
+        super().__init__(tg_client)
+        self._jwt_token: Optional[str] = None
+        self._token_created_time: Optional[float] = None
+        self._base_url: str = "https://mutant-gifts.xyz"
+        self._session_cookies: Dict[str, str] = {}
+        self._init_data: Optional[str] = None
+        self._ssl_disabled: bool = False
+        
+        # Статистика для отслеживания
+        self._stats = {
+            'unranked_battles': 0,
+            'ranked_battles': 0,
+            'total_coins_earned': 0,
+            'total_gems_earned': 0,
+            'total_rating_earned': 0,
+            'battles_won': 0,
+            'battles_lost': 0,
+            'unranked_refills': 0,
+            'ranked_refills': 0,
+            'total_gems_spent_on_refills': 0,
+            'mutations_performed': 0
+        }
+        
+        # Кэш неудачных прокачек для предотвращения спама сервера
+        self._failed_upgrades = {}  # {character_id: {level: timestamp, ...}}
+        self._upgrade_failure_timeout = 3600  # 1 час блокировка после неудачной прокачки
+
+    def _is_upgrade_blocked(self, character_id: str, current_level: int) -> bool:
+        """Проверяет, заблокирована ли прокачка персонажа на указанный следующий уровень"""
+        if character_id not in self._failed_upgrades:
+            return False
+        
+        # Блокировки сохраняются по целевому уровню; вычисляем его из текущего
+        target_level = current_level + 1
+        level_failures = self._failed_upgrades.get(character_id, {})
+        if target_level not in level_failures:
+            return False
+        
+        # Проверяем, прошло ли достаточно времени с момента неудачной прокачки
+        failure_time = level_failures[target_level]
+        current_time = time()
+        
+        if current_time - failure_time < self._upgrade_failure_timeout:
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | 🚫 Прокачка {character_id} до уровня {target_level} заблокирована на {self._upgrade_failure_timeout - (current_time - failure_time):.0f}с")
+            return True
+        
+        # Если время истекло, удаляем запись о неудаче
+        del level_failures[target_level]
+        if not level_failures:
+            del self._failed_upgrades[character_id]
+        
+        return False
+
+    def _mark_upgrade_failed(self, character_id: str, level: int) -> None:
+        """Отмечает неудачную попытку прокачки персонажа"""
+        if character_id not in self._failed_upgrades:
+            self._failed_upgrades[character_id] = {}
+        
+        self._failed_upgrades[character_id][level] = time()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"{self.session_name} | 🚫 Прокачка {character_id} до уровня {level} заблокирована на {self._upgrade_failure_timeout}с")
+
+    def calculate_character_upgrade_cost(self, character: Dict) -> Optional[int]:
+        """Расчет стоимости прокачки персонажа по оригинальной формуле игры
+        
+        Формула из игры:
+        BASE_LEVEL_COST = 400
+        LEVEL_COST_MULTIPLIER = 1.25
+        getLevelCost(level) = round(400 * 1.25^(level - 2))
+        getTotalUpgradeCost(from, to) = sum(getLevelCost(i) for i in range(from+1, to+1))
+        
+        Args:
+            character: Данные персонажа с полем 'level'
+            
+        Returns:
+            Optional[int]: Стоимость прокачки на 1 уровень или None
+        """
+        try:
+            current_level = character.get('level', 1)
+            next_level = current_level + 1
+            
+            # Константы из оригинальной игры
+            BASE_LEVEL_COST = 400
+            LEVEL_COST_MULTIPLIER = 1.25
+            
+            # Стоимость одного уровня: round(400 * 1.25^(level - 2))
+            def get_level_cost(level: int) -> int:
+                return round(BASE_LEVEL_COST * (LEVEL_COST_MULTIPLIER ** (level - 2)))
+            
+            # Суммарная стоимость от current_level до next_level
+            total_cost = 0
+            for level in range(current_level + 1, next_level + 1):
+                total_cost += get_level_cost(level)
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(
+                    f"{self.session_name} | Расчет стоимости для {character.get('name', 'Unknown')}: "
+                    f"уровень {current_level} -> {next_level}, стоимость={total_cost}"
+                )
+            
+            return total_cost
+            
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка расчета стоимости прокачки: {str(error)}")
+            return None
+    
+    def get_character_upgrade_cost(self, character: Dict) -> Optional[int]:
+        """Получение реальной стоимости улучшения персонажа из данных API
+        
+        Args:
+            character: Данные персонажа из API
+            
+        Returns:
+            Optional[int]: Стоимость улучшения или None если не найдена
+        """
+        if not isinstance(character, dict):
+            return None
+            
+        # Проверяем различные возможные поля с стоимостью
+        cost_fields = [
+            'upgrade_cost',
+            'next_level_cost', 
+            'level_up_cost',
+            'cost'
+        ]
+        
+        for field in cost_fields:
+            if field in character:
+                cost = character[field]
+                if isinstance(cost, int) and cost > 0:
+                    return cost
+                elif isinstance(cost, str):
+                    try:
+                        return int(cost)
+                    except ValueError:
+                        continue
+        
+        # Проверяем поле cost_info в формате "1400 / 2000" (как в HTML)
+        cost_info = character.get('cost_info', '')
+        if isinstance(cost_info, str) and '/' in cost_info:
+            try:
+                cost_part = cost_info.split('/')[0].strip()
+                return int(cost_part)
+            except (ValueError, IndexError):
+                pass
+        
+        # Если не найдено в полях API, используем расчетную формулу
+        return self.calculate_character_upgrade_cost(character)
+
+    def can_afford_character_upgrade(self, character: Dict, available_coins: int, min_balance: int = 0) -> bool:
+        """Проверяет, можно ли позволить себе прокачку персонажа
+        
+        Args:
+            character: Данные персонажа из API
+            available_coins: Доступное количество монет
+            min_balance: Минимальный баланс, который нужно сохранить
+        
+        Returns:
+            bool: True если можно позволить себе прокачку
+        """
+        upgrade_cost = self.get_character_upgrade_cost(character)
+        if upgrade_cost is None:
+            # Если стоимость не найдена, считаем что прокачка недоступна
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | can_afford: {character.get('name', 'Unknown')} - стоимость None")
+            return False
+        
+        can_afford = available_coins - upgrade_cost >= min_balance
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"{self.session_name} | can_afford: {character.get('name', 'Unknown')} - стоимость={upgrade_cost}, баланс={available_coins}, мин_баланс={min_balance}, результат={can_afford}")
+        
+        return can_afford
+
     async def get_profile(self) -> Optional[Dict]:
         """Получение профиля пользователя"""
         try:
@@ -588,6 +762,22 @@ class MutantGiftsBot(BaseBot):
             logger.error(f"{self.session_name} | Ошибка получения профиля: {str(error)}")
             return None
     
+    async def get_mutations_info(self) -> Optional[Dict]:
+        """Получение информации о мутациях"""
+        try:
+            response = await self.make_mutant_request(
+                method="GET",
+                url=f"{self._base_url}/apiv1/mutations"
+            )
+            if response:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Получена информация о мутациях")
+                return response
+            return None
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения информации о мутациях: {str(error)}")
+            return None
+
     async def mutate_gems(self) -> Optional[Dict]:
         """Получение персонажа через мутацию за стартовые гемы"""
         try:
@@ -605,161 +795,11 @@ class MutantGiftsBot(BaseBot):
         except Exception as error:
             logger.error(f"{self.session_name} | Ошибка мутации: {str(error)}")
             return None
+   
 
-    async def get_mutations_info(self) -> Optional[Dict]:
-        """Получение информации о доступных мутациях"""
-        try:
-            response = await self.make_mutant_request(
-                method="GET",
-                url=f"{self._base_url}/apiv1/mutations"
-            )
-            if response is not None:
-                if settings.DEBUG_LOGGING:
-                    logger.debug(f"{self.session_name} | Данные по мутациям получены")
-                return response
-            logger.error(f"{self.session_name} | Не удалось получить данные по мутациям")
-            return None
-        except Exception as error:
-            logger.error(f"{self.session_name} | Ошибка получения данных по мутациям: {str(error)}")
-            return None
-
-    def calculate_level_up_cost(self, character_level: int, rarity: str = "Common") -> int:
-        """Расчет стоимости прокачки персонажа на следующий уровень
-        
-        Args:
-            character_level: Текущий уровень персонажа
-            rarity: Редкость персонажа
-        
-        Returns:
-            int: Стоимость прокачки в монетах
-        """
-        # Скорректированная формула на основе наблюдений из UI игры
-        # Учитывает более реалистичный рост стоимости для высоких уровней
-        if character_level <= 5:
-            # Низкие уровни - линейный рост
-            base_cost = 100 + (character_level - 1) * 75
-        elif character_level <= 15:
-            # Средние уровни - квадратичный рост
-            base_cost = int(400 + (character_level - 5) ** 2 * 50)
-        elif character_level <= 25:
-            # Высокие уровни - экспоненциальный рост
-            base_cost = int(2000 * (1.15 ** (character_level - 15)))
-        else:
-            # Очень высокие уровни - контролируемый супер экспоненциальный рост
-            base_cost = int(10000 * (1.25 ** (character_level - 25)))
-        
-        # Скорректированные множители редкости (основано на наблюдениях)
-        rarity_multipliers = {
-            'Common': 1.0,
-            'Uncommon': 1.5,
-            'Rare': 2.2,
-            'Epic': 3.5,
-            'Legendary': 5.5
-        }
-        
-        multiplier = rarity_multipliers.get(rarity, 1.0)
-        final_cost = int(base_cost * multiplier)
-        
-        # Ограничиваем максимальную стоимость чтобы избежать переполнения
-        # и проблем с отображением в UI игры
-        max_cost = 10_000_000  # 10 миллионов монет максимум
-        final_cost = min(final_cost, max_cost)
-        
-        # Минимальная стоимость не может быть меньше 50 монет
-        return max(50, final_cost)
-    
-    def can_afford_next_level(self, current_level: int, available_coins: int, rarity: str = "Common", min_balance: int = 0) -> bool:
-        """Проверяет, можно ли позволить себе прокачку на следующий уровень
-        
-        Args:
-            current_level: Текущий уровень персонажа
-            available_coins: Доступное количество монет
-            rarity: Редкость персонажа
-            min_balance: Минимальный баланс, который нужно сохранить
-        
-        Returns:
-            bool: True если можно позволить себе прокачку
-        """
-        level_cost = self.calculate_level_up_cost(current_level, rarity)
-        return available_coins - level_cost >= min_balance
-    
-    def calculate_max_affordable_level(self, current_level: int, available_coins: int, rarity: str = "Common", min_balance: int = 0) -> Tuple[int, int]:
-        """Старая функция - оставлена для совместимости, но не используется в новой логике
-        Просто возвращаем следующий уровень если можно позволить, или текущий
-        """
-        if self.can_afford_next_level(current_level, available_coins, rarity, min_balance):
-            next_level_cost = self.calculate_level_up_cost(current_level, rarity)
-            return current_level + 1, next_level_cost
-        else:
-            return current_level, 0
-    
-    def _is_upgrade_blocked(self, character_id: str, current_level: int) -> bool:
-        """Проверяет, заблокирована ли прокачка персонажа на указанный уровень
-        
-        Args:
-            character_id: ID персонажа
-            current_level: Текущий уровень персонажа для прокачки на следующий
-        
-        Returns:
-            bool: True если прокачка заблокирована
-        """
-        import time
-        
-        if character_id not in self._failed_upgrades:
-            return False
-        
+    async def level_up_character(self, character_id: str, current_level: int) -> bool:
         target_level = current_level + 1
-        char_failures = self._failed_upgrades[character_id]
-        
-        # Проверяем, есть ли блокировка для этого уровня
-        if target_level in char_failures:
-            failure_time = char_failures[target_level]
-            time_passed = time.time() - failure_time
-            
-            if time_passed < self._upgrade_failure_timeout:
-                remaining_time = self._upgrade_failure_timeout - time_passed
-                if settings.DEBUG_LOGGING:
-                    logger.debug(f"{self.session_name} | 🚫 Прокачка персонажа {character_id} до {target_level} уровня заблокирована еще на {remaining_time/60:.1f} мин")
-                return True
-            else:
-                # Блокировка истекла, удаляем её
-                del char_failures[target_level]
-                if not char_failures:
-                    del self._failed_upgrades[character_id]
-        
-        return False
-    
-    def _mark_upgrade_failed(self, character_id: str, target_level: int):
-        """Отмечает прокачку персонажа как неудачную для предотвращения повторных попыток
-        
-        Args:
-            character_id: ID персонажа
-            target_level: Уровень, до которого не удалось прокачать
-        """
-        import time
-        
-        if character_id not in self._failed_upgrades:
-            self._failed_upgrades[character_id] = {}
-        
-        self._failed_upgrades[character_id][target_level] = time.time()
-        
-        logger.warning(f"{self.session_name} | 🚫 Прокачка {character_id} до {target_level} уровня заблокирована на {self._upgrade_failure_timeout/60:.0f} мин")
-    
-    async def level_up_character(self, character_id: str, target_level: int) -> bool:
-        """Улучшение персонажа до указанного уровня (обновленная версия API)
-        
-        Args:
-            character_id: ID персонажа
-            target_level: Целевой уровень персонажа
-        
-        Returns:
-            bool: True если прокачка прошла успешно
-        """
         try:
-            # Проверяем, не заблокирована ли прокачка
-            if self._is_upgrade_blocked(character_id, target_level - 1):
-                return False
-            
             payload = {
                 "id": character_id,
                 "level": target_level
@@ -774,10 +814,8 @@ class MutantGiftsBot(BaseBot):
                     logger.debug(f"{self.session_name} | Персонаж {character_id} улучшен до уровня {target_level}")
                 return True
             
-            # Прокачка не удалась - блокируем повторные попытки
             self._mark_upgrade_failed(character_id, target_level)
             
-            # Проверяем тип ошибки для более информативного логирования
             if response is None:
                 logger.error(f"{self.session_name} | ❌ Не удалось улучшить персонажа {character_id} до уровня {target_level} - сервер вернул пустой ответ (возможно персонаж на максимальном уровне)")
             else:
@@ -786,7 +824,6 @@ class MutantGiftsBot(BaseBot):
             return False
             
         except Exception as error:
-            # При ошибке также блокируем повторные попытки
             self._mark_upgrade_failed(character_id, target_level)
             logger.error(f"{self.session_name} | ❌ Ошибка улучшения персонажа {character_id}: {str(error)}")
             return False
@@ -841,57 +878,30 @@ class MutantGiftsBot(BaseBot):
         except Exception as error:
             logger.error(f"{self.session_name} | Ошибка восстановления рейтинговой энергии: {str(error)}")
             return False
-    
-    def get_refill_cost(self, refill_count: int) -> int:
-        """Возвращает стоимость восстановления энергии в гемах"""
-        if refill_count == 1:
-            return 60
-        elif refill_count == 2:
-            return 120
-        else:  # 3+ восстановления
-            return 240
+
     
     async def smart_energy_refill(self, profile: Dict, energy_type: str = "ranked") -> bool:
-        """Умное восстановление энергии на основе настроек
-        
-        Args:
-            profile: Профиль пользователя
-            energy_type: Тип энергии 'ranked' или 'unranked'
-        
-        Returns:
-            bool: True если восстановление прошло успешно
-        """
         if not settings.AUTO_REFILL_ENERGY:
-            return False
-        
-        if not isinstance(profile, dict):
             return False
         
         current_gems = profile.get('gems', 0)
         
-        # Определяем количество уже сделанных восстановлений
         if energy_type == "ranked":
             refills_made = self._stats['ranked_refills']
-            can_refill_key = 'refill_price_ranked_gems'  # Ключ из профиля
+            next_refill_cost = profile.get('refill_price_ranked_gems', 120)
         else:
             refills_made = self._stats['unranked_refills']
-            can_refill_key = 'refill_price_unranked_gems'
+            next_refill_cost = profile.get('refill_price_unranked_gems', 60)
         
-        # Проверяем, можно ли делать восстановление
         if refills_made >= settings.MAX_ENERGY_REFILLS:
             if settings.DEBUG_LOGGING:
                 logger.debug(f"{self.session_name} | 🚫 Достигнут лимит восстановлений {energy_type} энергии: {refills_made}/{settings.MAX_ENERGY_REFILLS}")
             return False
         
-        # Рассчитываем стоимость следующего восстановления
-        next_refill_cost = self.get_refill_cost(refills_made + 1)
-        
-        # Проверяем достаточно ли гемов
         if current_gems < next_refill_cost:
             logger.debug(f"{self.session_name} | 💵 Недостаточно гемов для восстановления {energy_type} энергии: {current_gems} < {next_refill_cost}")
             return False
         
-        # Выполняем восстановление
         logger.info(f"{self.session_name} | 💰 Восстанавливаем {energy_type} энергию за {next_refill_cost} гемов (восстановление #{refills_made + 1})")
         
         if energy_type == "ranked":
@@ -970,6 +980,10 @@ class MutantGiftsBot(BaseBot):
                 characters = response["characters"]
                 if settings.DEBUG_LOGGING:
                     logger.debug(f"{self.session_name} | {self.EMOJI['character']} Получено {len(characters)} персонажей")
+                    if characters:
+                        first_char = characters[0]
+                        logger.debug(f"{self.session_name} | Структура данных персонажа: {first_char.keys()}")
+                        logger.debug(f"{self.session_name} | Пример персонажа: {first_char}")
                 return characters
             else:
                 logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить персонажей, response: {response}")
@@ -1185,8 +1199,8 @@ class MutantGiftsBot(BaseBot):
         
         return remaining_characters
 
-    def select_best_character_for_upgrade(self, pinned_characters: List[Dict], available_coins: int = 0) -> Optional[Dict]:
-        """Выбор лучшего персонажа для прокачки на основе приоритета pin_index и доступного баланса
+    async def select_best_character_for_upgrade(self, pinned_characters: List[Dict], available_coins: int = 0) -> Optional[Dict]:
+        """Выбор лучшего персонажа для прокачки - качаем самого слабого (по уровню)
         
         Args:
             pinned_characters: Список закрепленных персонажей
@@ -1198,7 +1212,7 @@ class MutantGiftsBot(BaseBot):
         if not pinned_characters:
             return None
         
-        # Фильтруем и сортируем закрепленных персонажей по приоритету
+        # Фильтруем только закрепленных персонажей
         pinned = [
             c for c in pinned_characters 
             if isinstance(c, dict) and c.get('pin_index') is not None
@@ -1207,37 +1221,45 @@ class MutantGiftsBot(BaseBot):
         if not pinned:
             return None
         
-        # Сортируем по pin_index (0 = самый приоритетный)
-        pinned.sort(key=lambda c: c.get('pin_index', 999))
+        # Сортируем по уровню (от слабого к сильному)
+        pinned.sort(key=lambda c: c.get('level', 1))
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"{self.session_name} | Проверка {len(pinned)} персонажей для прокачки. Баланс: {available_coins}")
         
         # Проверяем каждого персонажа в порядке приоритета
         for char in pinned:
             char_id = char.get('id')
             current_level = char.get('level', 1)
             rarity = char.get('rarity', 'Common')
+            char_name = char.get('name', 'Unknown')
             
             # Проверяем, не заблокирована ли прокачка этого персонажа
             if self._is_upgrade_blocked(char_id, current_level):
                 if settings.DEBUG_LOGGING:
-                    char_name = char.get('name', 'Unknown')
-                    logger.debug(f"{self.session_name} | 🚫 {char_name} (pin #{char.get('pin_index')}) заблокирован для прокачки")
+                    logger.debug(f"{self.session_name} | 🚫 {char_name} (lvl {current_level}) заблокирован для прокачки")
                 continue
             
-            # Рассчитываем стоимость следующего уровня
-            next_level_cost = self.calculate_level_up_cost(current_level, rarity)
+            # Получаем стоимость прокачки (используем get_character_upgrade_cost для единообразия)
+            next_level_cost = self.get_character_upgrade_cost(char)
+            if next_level_cost is None:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | ❓ {char_name} (lvl {current_level}) - стоимость улучшения не найдена")
+                continue
             
             # Проверяем, хватает ли денег с учетом минимального баланса
-            if available_coins > 0 and not self.can_afford_next_level(current_level, available_coins, rarity, settings.MIN_COINS_BALANCE):
-                if settings.DEBUG_LOGGING:
-                    char_name = char.get('name', 'Unknown')
-                    logger.debug(f"{self.session_name} | 💰 {char_name} (pin #{char.get('pin_index')}) слишком дорог: {next_level_cost} > {available_coins - settings.MIN_COINS_BALANCE}")
-                continue
+            if available_coins > 0:
+                affordable = self.can_afford_character_upgrade(char, available_coins, settings.MIN_COINS_BALANCE)
+                if not affordable:
+                    if settings.DEBUG_LOGGING:
+                        remaining_after_upgrade = available_coins - next_level_cost
+                        logger.debug(f"{self.session_name} | 💰 {char_name} (lvl {current_level}) слишком дорог: стоимость {next_level_cost}, после прокачки останется {remaining_after_upgrade}, требуется минимум {settings.MIN_COINS_BALANCE}")
+                    continue
             
             if settings.DEBUG_LOGGING:
-                char_name = char.get('name', 'Unknown')
-                logger.debug(f"{self.session_name} | 🎯 {char_name} (pin #{char.get('pin_index')}): уровень {current_level} -> {current_level + 1}, стоимость: {next_level_cost}")
+                logger.debug(f"{self.session_name} | 🎯 {char_name} (lvl {current_level}): прокачка до {current_level + 1}, стоимость: {next_level_cost}")
             
-            # Возвращаем первого доступного персонажа по приоритету
+            # Возвращаем первого доступного персонажа (самый слабый по уровню)
             return char
         
         # Если дошли до сюда, значит все персонажи заблокированы или слишком дороги
@@ -1269,9 +1291,20 @@ class MutantGiftsBot(BaseBot):
         
         logger.debug(f"{self.session_name} | 🚀 Начинаем упрощенную прокачку (по 1 уровню). Монет: {current_coins}")
         
+        # Логируем информацию о всех персонажах перед началом
+        if settings.DEBUG_LOGGING and updated_characters:
+            logger.debug(f"{self.session_name} | Персонажи для прокачки:")
+            for char in updated_characters:
+                if isinstance(char, dict):
+                    char_name = char.get('name', 'Unknown')
+                    char_level = char.get('level', 1)
+                    char_pin = char.get('pin_index', 'N/A')
+                    char_id = char.get('id', 'N/A')
+                    logger.debug(f"{self.session_name} |   - {char_name} (lvl {char_level}, pin #{char_pin}), ID: {char_id}")
+        
         while True:
             # Выбираем лучшего персонажа для прокачки с учетом текущего баланса
-            best_char = self.select_best_character_for_upgrade(updated_characters, current_coins)
+            best_char = await self.select_best_character_for_upgrade(updated_characters, current_coins)
             if not best_char:
                 if consecutive_failures > 0:
                     logger.debug(f"{self.session_name} | ⚠️ Нет доступных персонажей для прокачки (заблокированы после ошибок)")
@@ -1282,17 +1315,23 @@ class MutantGiftsBot(BaseBot):
             char_id = best_char.get('id')
             char_name = best_char.get('name', 'Unknown')
             current_level = best_char.get('level', 1)
-            rarity = best_char.get('rarity', 'Common')
             pin_index = best_char.get('pin_index')
             
-            # Рассчитываем стоимость следующего уровня
-            next_level_cost = self.calculate_level_up_cost(current_level, rarity)
+            # Получаем реальную стоимость улучшения
+            next_level_cost = self.get_character_upgrade_cost(best_char)
+            if next_level_cost is None:
+                logger.warning(f"{self.session_name} | ❓ {char_name} (lvl {current_level}) - стоимость улучшения не найдена, пропускаем")
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.warning(f"{self.session_name} | ⚠️ Слишком много ошибок подряд, прекращаем прокачку")
+                    break
+                continue
             
             # Прокачиваем на 1 уровень
             target_level = current_level + 1
-            logger.info(f"{self.session_name} | 🚀 Прокачиваем {char_name} (pin #{pin_index}) с {current_level} до {target_level} за {next_level_cost} монет")
+            logger.info(f"{self.session_name} | 🚀 Прокачиваем {char_name} (lvl {current_level}) до {target_level} за {next_level_cost} монет")
             
-            success = await self.level_up_character(char_id, target_level)
+            success = await self.level_up_character(char_id, current_level)
             if success:
                 current_coins -= next_level_cost
                 consecutive_failures = 0  # Сбрасываем счетчик неудач
@@ -1436,6 +1475,8 @@ class MutantGiftsBot(BaseBot):
                 await asyncio.sleep(uniform(5, 36))
             else:
                 logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось запустить бой, прерываем")
+                # Если бой не удался из-за rate limit - ждем немного больше перед следующей попыткой
+                await asyncio.sleep(uniform(10, 20))
                 break
         
         if battles_fought > 0:
@@ -1609,8 +1650,8 @@ class MutantGiftsBot(BaseBot):
                     if self._is_first_run:
                         await self.perform_first_run_tutorial()
 
-                    # Запускаем основную логику Mutant Gifts
-                    await self.process_mutant_gifts_logic()
+                    # Запускаем основную логику бота
+                    await self.process_bot_logic()
                     
                 except InvalidSession as e:
                     logger.error(f"[{self.session_name}] InvalidSession: {e}")
@@ -1655,7 +1696,8 @@ class MutantGiftsBot(BaseBot):
             # Выполняем запрос на получение награды
             response = await self.make_mutant_request(
                 method="POST",
-                url=f"{self._base_url}/apiv1/profile/claim_daily_streak"
+                url=f"{self._base_url}/apiv1/profile/claim_daily_streak",
+                json={}
             )
             
             if response and response.get("success") is True:
@@ -1678,6 +1720,48 @@ class MutantGiftsBot(BaseBot):
                 
         except Exception as error:
             logger.error(f"{self.session_name} | Ошибка получения ежедневной награды: {str(error)}")
+            return False
+
+    async def claim_referral_gems(self) -> bool:
+        """Получение реферальных гемов"""
+        try:
+            # Получаем профиль для проверки доступных реферальных гемов
+            profile = await self.get_profile()
+            if not profile or not isinstance(profile, dict):
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить профиль перед клеймом реферальных гемов")
+                return False
+                
+            claimable_gems = profile.get('claimable_referral_gems', 0)
+            
+            if claimable_gems <= 0:
+                logger.info(f"{self.session_name} | {self.EMOJI['info']} Нет доступных реферальных гемов для получения")
+                return False
+            
+            # Выполняем запрос на получение реферальных гемов
+            response = await self.make_mutant_request(
+                method="POST",
+                url=f"{self._base_url}/apiv1/profile/claim_referral_gems"
+            )
+            
+            if response and response.get("success") is True:
+                # Получаем обновленный профиль для проверки полученных гемов
+                updated_profile = await self.get_profile()
+                if updated_profile and isinstance(updated_profile, dict):
+                    gems_before = profile.get('gems', 0)
+                    gems_after = updated_profile.get('gems', 0)
+                    gems_earned = gems_after - gems_before
+                    
+                    logger.info(f"{self.session_name} | {self.EMOJI['success']} Реферальные гемы получены! Получено: {gems_earned} гемов")
+                else:
+                    logger.info(f"{self.session_name} | {self.EMOJI['success']} Реферальные гемы получены! Ожидалось: {claimable_gems} гемов")
+                return True
+            else:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | Не удалось получить реферальные гемы, response: {response}")
+                return False
+                
+        except Exception as error:
+            logger.error(f"{self.session_name} | Ошибка получения реферальных гемов: {str(error)}")
             return False
     
     async def get_activities(self) -> Optional[List[Dict]]:
@@ -1766,6 +1850,67 @@ class MutantGiftsBot(BaseBot):
             if settings.DEBUG_LOGGING:
                 logger.debug(f"{self.session_name} | {self.EMOJI['info']} Нет выполненных заданий")
     
+
+
+    async def process_bot_logic(self) -> None:
+        """Новая упрощенная логика обработки бота для Mutant Gifts"""
+        try:
+            # Проверяем истечение токена
+            if self._is_token_expired():
+                logger.info(f"{self.session_name} | {self.EMOJI['warning']} Токен истек, перезапускаем авторизацию")
+                if not await self._restart_authorization():
+                    logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось перезапустить авторизацию")
+                    return
+
+            # Получаем профиль пользователя
+            profile = await self.get_profile()
+            if not profile:
+                logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось получить профиль")
+                return
+
+            # Логируем информацию о профиле из ответа API
+            username = profile.get('username', 'N/A')
+            gems = profile.get('gems', 0)
+            coins = profile.get('coins', 0)
+            ranked_energy = profile.get('ranked_energy', 0)
+            unranked_energy = profile.get('unranked_energy', 0)
+            claimable_referral_gems = profile.get('claimable_referral_gems', 0)
+            daily_streak = profile.get('daily_streak', 0)
+            can_claim_daily_streak = profile.get('can_claim_daily_streak', False)
+            
+            logger.info(f"{self.session_name} | {self.EMOJI['info']} Профиль: {username}")
+            logger.info(f"{self.session_name} | 💎 Гемы: {gems} | 🪙 Монеты: {coins}")
+            logger.info(f"{self.session_name} | ⚡ Энергия - Рейтинговая: {ranked_energy} | Обычная: {unranked_energy}")
+            logger.info(f"{self.session_name} | 🔥 Серия: {daily_streak} дней | Можно забрать: {can_claim_daily_streak}")
+            
+            if claimable_referral_gems > 0:
+                logger.info(f"{self.session_name} | 👥 Доступно реферальных гемов: {claimable_referral_gems}")
+
+            # 1. Клейм ежедневной серии
+            if can_claim_daily_streak and settings.CLAIM_DAILY_STREAK:
+                await self.claim_daily_streak()
+                await asyncio.sleep(uniform(1, 3))
+
+            # 2. Клейм реферальных гемов
+            if claimable_referral_gems > 0:
+                await self.claim_referral_gems()
+                await asyncio.sleep(uniform(1, 3))
+
+            # 3. Обработка активностей
+            if settings.PROCESS_ACTIVITIES:
+                await self.process_activities()
+                await asyncio.sleep(uniform(1, 3))
+
+            # Переходим к основной логике боев
+            await self.process_mutant_gifts_logic()
+
+        except InvalidSession as e:
+            logger.error(f"{self.session_name} | {self.EMOJI['error']} Недействительная сессия: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"{self.session_name} | {self.EMOJI['error']} Ошибка в process_bot_logic: {e}")
+            raise
+
     async def process_mutant_gifts_logic(self) -> None:
         """Основная логика бота для Mutant Gifts с исправленными приоритетами
         
@@ -1774,7 +1919,7 @@ class MutantGiftsBot(BaseBot):
         2. ПРИОРИТЕТ: Проверяем таски и забираем гемы (для рефиллов)
         3. Бьем обычные бои
         4. Бьем рейтинговые бои
-        5. Делаем рефилл за гемы (с приоритетом на ранговые)
+        5. Делаем рефилл за гемы (с приоритетом на ранковые)
         6. Делаем мутации за оставшиеся гемы (с запасом на рефиллы)
         7. Повторяем цикл или идем спать
         """
@@ -1834,8 +1979,23 @@ class MutantGiftsBot(BaseBot):
             # Все равно проверяем задания, возможно есть выполненные, но не отмеченные в профиле
             await self.process_activities()
         
-        # Получаем закрепленных персонажей из профиля
-        pinned_characters = profile.get('pinned_characters', [])
+        # Получаем всех персонажей для авто-закрепления и распыления
+        all_characters = await self.get_characters()
+        
+        # Авто-закрепление лучших карт по раритетности
+        if all_characters:
+            best_pinned_ids = await self.ensure_best_pins(all_characters)
+            logger.info(f"{self.session_name} | {self.EMOJI['character']} Закреплены лучшие карты: {len(best_pinned_ids)}")
+            # Обновляем профиль после закрепления для получения актуальных pinned_characters
+            profile = await self.get_profile()
+            if profile:
+                pinned_characters = profile.get('pinned_characters', [])
+            else:
+                pinned_characters = []
+        else:
+            pinned_characters = []
+        
+        # Проверяем корректность данных
         if not isinstance(pinned_characters, list):
             logger.error(f"{self.session_name} | {self.EMOJI['error']} Некорректный формат pinned_characters: {type(pinned_characters).__name__}")
             pinned_characters = []
@@ -1845,10 +2005,9 @@ class MutantGiftsBot(BaseBot):
         else:
             logger.info(f"{self.session_name} | {self.EMOJI['character']} Закреплено персонажей: {len(pinned_characters)}")
         
-        # Авто-распыление ненужных карт
-        all_characters = await self.get_characters()
+        # Авто-распыление ненужных карт (после закрепления лучших)
         if all_characters:
-            await self.auto_disenchant_low_rarity(all_characters)
+            all_characters = await self.auto_disenchant_low_rarity(all_characters)
         
         # Авто-мутация: пока хватает гемов и включено
         mutation_price_gems = self._get_mutation_gems_price(profile)
@@ -1876,6 +2035,20 @@ class MutantGiftsBot(BaseBot):
             
             if mutations_count > 0:
                 logger.info(f"{self.session_name} | ✨ Выполнено {mutations_count} мутаций! Осталось гемов: {gems}")
+                
+                # После мутаций перезакрепляем лучшие карты
+                all_characters = await self.get_characters()
+                if all_characters:
+                    best_pinned_ids = await self.ensure_best_pins(all_characters)
+                    logger.info(f"{self.session_name} | {self.EMOJI['character']} Перезакреплены лучшие карты после мутаций: {len(best_pinned_ids)}")
+                    
+                    # Распыляем ненужные карты после мутаций
+                    all_characters = await self.auto_disenchant_low_rarity(all_characters)
+                    
+                    # Обновляем профиль после изменений
+                    profile = await self.get_profile()
+                    if profile:
+                        pinned_characters = profile.get('pinned_characters', [])
 
         # Авто-улучшение: только закрепленных карт, при балансе выше MIN_COINS_BALANCE
         if settings.AUTO_UPGRADE and pinned_characters:
@@ -1995,12 +2168,12 @@ class MutantGiftsBot(BaseBot):
 
                 # 1. Safety for Ranked Refill
                 if ranked_energy == 0 and self._stats['ranked_refills'] < settings.MAX_ENERGY_REFILLS:
-                    next_ranked_cost = self.get_refill_cost(self._stats['ranked_refills'] + 1)
+                    next_ranked_cost = profile.get('refill_price_ranked_gems', 120)
                     safety_margin = max(safety_margin, next_ranked_cost)
 
                 # 2. Safety for Unranked Refill
                 if unranked_energy == 0 and self._stats['unranked_refills'] < settings.MAX_ENERGY_REFILLS:
-                    next_unranked_cost = self.get_refill_cost(self._stats['unranked_refills'] + 1)
+                    next_unranked_cost = profile.get('refill_price_unranked_gems', 60)
                     # Берем максимальную стоимость из двух, чтобы покрыть наиболее дорогой необходимый рефилл.
                     safety_margin = max(safety_margin, next_unranked_cost)
 
