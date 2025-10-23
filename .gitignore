@@ -16,6 +16,9 @@ used_promo_codes_*.txt
 
 # Игнорировать папки целиком
 sessions/
+!sessions/.gitkeep
+*.session
+*.session.backup
 venv/
 logs/
 .cursor/

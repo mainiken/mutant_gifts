@@ -592,6 +592,19 @@ wheels = [
 ]
 
 [[package]]
+name = "kurigram"
+version = "2.2.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyaes" },
+    { name = "pysocks" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/21/dc/da266f27a96d67725861dbf6d44c856adbd07f7cacb95a36e85df2e9cd22/kurigram-2.2.12.tar.gz", hash = "sha256:0c40b8881bda9f4a5ceed5d8fdf97811eecf0e76ea34e529d8181925450a4335", size = 523275, upload_time = "2025-09-19T20:00:16.921Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/9c/e325ab31c48f463b55d683a73e0345fa30dbc3a8dfc58130395655e07225/kurigram-2.2.12-py3-none-any.whl", hash = "sha256:f9dcedff87160cf48a911ee9b92b2e956b700c306e2bc10f008684962aed5eac", size = 5091137, upload_time = "2025-09-19T20:00:15.506Z" },
+]
+
+[[package]]
 name = "loguru"
 version = "0.7.2"
 source = { registry = "https://pypi.org/simple" }
@@ -775,6 +788,7 @@ dependencies = [
     { name = "itsdangerous" },
     { name = "jinja2" },
     { name = "js2py" },
+    { name = "kurigram" },
     { name = "loguru" },
     { name = "markupsafe" },
     { name = "matplotlib" },
@@ -785,7 +799,6 @@ dependencies = [
     { name = "pyasn1" },
     { name = "pydantic-settings" },
     { name = "pyjsparser" },
-    { name = "pyrogram" },
     { name = "pysocks" },
     { name = "pytest" },
     { name = "python-dateutil" },
@@ -827,6 +840,7 @@ requires-dist = [
     { name = "itsdangerous", specifier = "==2.2.0" },
     { name = "jinja2", specifier = "==3.1.4" },
     { name = "js2py", specifier = "==0.74" },
+    { name = "kurigram", specifier = "==2.2.12" },
     { name = "loguru", specifier = "==0.7.2" },
     { name = "markupsafe", specifier = "==3.0.2" },
     { name = "matplotlib", specifier = "==3.8.2" },
@@ -837,7 +851,6 @@ requires-dist = [
     { name = "pyasn1", specifier = "==0.6.1" },
     { name = "pydantic-settings", specifier = "==2.4.0" },
     { name = "pyjsparser", specifier = "==2.7.1" },
-    { name = "pyrogram", specifier = "==2.0.106" },
     { name = "pysocks", specifier = "==1.7.1" },
     { name = "pytest", specifier = "==7.4.4" },
     { name = "python-dateutil", specifier = "==2.8.2" },
@@ -847,7 +860,7 @@ requires-dist = [
     { name = "rsa", specifier = "==4.9" },
     { name = "six", specifier = "==1.16.0" },
     { name = "sqlalchemy", specifier = "==2.0.28" },
-    { name = "telethon", specifier = "==1.36.0" },
+    { name = "telethon", specifier = "==1.41.2" },
     { name = "tgcrypto", specifier = "==1.2.5" },
     { name = "typing-extensions", specifier = "==4.12.2" },
     { name = "tzlocal", specifier = "==5.2" },
@@ -1191,19 +1204,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyrogram"
-version = "2.0.106"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pyaes" },
-    { name = "pysocks" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c8/8e/5d09eca17271320bb9a95e50b7e053770aee85b3fd338e8267e7b6b280ae/Pyrogram-2.0.106.tar.gz", hash = "sha256:30202995758fcb6e0f91224704ab7fedefea454297724bd70a6a71a23748c16f", size = 345997, upload_time = "2023-04-30T18:24:45.506Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/88/502ec24914d208e06baa6f27ff812f46815bb4f302018ad848ebf518abdf/Pyrogram-2.0.106-py3-none-any.whl", hash = "sha256:32b62b3d93030b1080cbe45b88c0e8790cf4e2179cf3321ede810d48edf97bc7", size = 3573685, upload_time = "2023-04-30T18:24:41.986Z" },
-]
-
-[[package]]
 name = "pysocks"
 version = "1.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1330,13 +1330,16 @@ wheels = [
 
 [[package]]
 name = "telethon"
-version = "1.36.0"
+version = "1.41.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyaes" },
     { name = "rsa" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7c/22/30ba05af24c8209f859cecccfaa5943b7a6ed39070da515b9e6b56738b20/Telethon-1.36.0.tar.gz", hash = "sha256:11db5c7ed7e37f1272d443fb7eea0f1db580d56c6949165233946fb323aaf3a7", size = 606300, upload_time = "2024-06-11T14:44:28.662Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/6a/3fc30b39eac0a8c770418c0f393d3ff040b9205938a1492d60f08934e97a/telethon-1.41.2.tar.gz", hash = "sha256:300a3441df62668378626b46cafda346573e9ac296367182510756334d2bdc5e", size = 669173, upload_time = "2025-09-04T19:08:02.026Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/e0/2fb26c432ee4259a6d4ab427196b84a2b0c81db232337b02cf2a09df1896/telethon-1.41.2-py3-none-any.whl", hash = "sha256:28b6b1023a0753a32039e6d1fda4b63cac138ce894cd5cbcac1d5ddd2f8426d8", size = 744889, upload_time = "2025-09-04T19:08:00.181Z" },
+]
 
 [[package]]
 name = "tgcrypto"

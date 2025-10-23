@@ -18,7 +18,7 @@ from bot.utils.proxy_utils import check_proxy, get_working_proxy
 from bot.utils.first_run import check_is_first_run, append_recurring_session
 from bot.config import settings
 from bot.utils import logger, config_utils, CONFIG_PATH
-from bot.exceptions import InvalidSession
+from bot.exceptions import InvalidSession, ServerUnavailableError
 
 
 
@@ -173,8 +173,12 @@ class BaseBot:
                             logger.debug(f"[{self.session_name}] response.text error: {e}")
                     if response.status == 200:
                         return await response.json()
-                    if response.status in (401, 502, 403, 418):
-                        logger.warning(f"[{self.session_name}] Access token expired or server error, пытаюсь re-login...")
+                    if response.status in (502, 503, 504):
+                        logger.warning(f"[{self.session_name}] Сервер временно недоступен ({response.status}), повтор через 10с...")
+                        await asyncio.sleep(10)
+                        continue
+                    if response.status in (401, 403, 418):
+                        logger.warning(f"[{self.session_name}] Access token expired, пытаюсь re-login...")
                         
                         # Для MutantGiftsBot используем новую логику с проверкой времени жизни токена
                         if hasattr(self, '_restart_authorization'):
@@ -449,8 +453,8 @@ class BaseBot:
                 logger.info(f"{self.session_name} | Авторизация в Mutant Gifts успешна")
                 return True
             else:
-                logger.error(f"{self.session_name} | Не удалось получить профиль, response: {profile_response}")
-                return False
+                logger.warning(f"{self.session_name} | Не удалось получить профиль при авторизации")
+                return True
                 
         except Exception as error:
             logger.error(f"{self.session_name} | Ошибка авторизации в Mutant Gifts: {str(error)}")
@@ -496,6 +500,11 @@ class BaseBot:
                         except Exception as e:
                             logger.error(f"[{self.session_name}] Failed to parse JSON response: {e}")
                             return None
+                    
+                    if response.status in (502, 503, 504):
+                        logger.warning(f"[{self.session_name}] Сервер временно недоступен ({response.status}), повтор через 10с...")
+                        await asyncio.sleep(10)
+                        continue
                     
                     if response.status in (401, 403):
                         logger.warning(f"[{self.session_name}] JWT токен истек, пытаюсь re-authenticate...")
@@ -1473,12 +1482,17 @@ class MutantGiftsBot(BaseBot):
                     if settings.DEBUG_LOGGING:
                         logger.debug(f"{self.session_name} | Результаты боя: {analysis}")
                 
-                # Случайная задержка между боями 5–36 секунд
-                await asyncio.sleep(uniform(5, 36))
+                # Задержка между боями для предотвращения rate limit
+                delay = uniform(settings.BATTLE_DELAY_MIN, settings.BATTLE_DELAY_MAX)
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"{self.session_name} | ⏳ Задержка между боями: {delay:.1f}с")
+                await asyncio.sleep(delay)
             else:
                 logger.error(f"{self.session_name} | {self.EMOJI['error']} Не удалось запустить бой, прерываем")
-                # Если бой не удался из-за rate limit - ждем немного больше перед следующей попыткой
-                await asyncio.sleep(uniform(10, 20))
+                # Если бой не удался из-за rate limit - ждем значительно дольше
+                rate_limit_delay = uniform(60, 90)
+                logger.warning(f"{self.session_name} | ⏳ Возможен rate limit, ждём {rate_limit_delay:.0f}с перед следующей попыткой...")
+                await asyncio.sleep(rate_limit_delay)
                 break
         
         if battles_fought > 0:
@@ -1646,7 +1660,7 @@ class MutantGiftsBot(BaseBot):
                     tg_web_data = await self.get_tg_web_data()
                     if not await self.authenticate(tg_web_data):
                         logger.error(f"[{self.session_name}] Authentication failed")
-                        raise InvalidSession("Authentication failed")
+                        raise ServerUnavailableError("Authentication failed - возможно проблемы с сервером")
 
                     # Проходим обучение при первом запуске
                     if self._is_first_run:
@@ -1663,15 +1677,16 @@ class MutantGiftsBot(BaseBot):
                 except (aiohttp.ServerTimeoutError, aiohttp.ClientTimeout, 
                         asyncio.TimeoutError, aiohttp.ClientConnectorError,
                         aiohttp.ClientOSError, aiohttp.ClientConnectionError) as network_error:
-                    # Временные сетевые ошибки - логируем как info/debug, не критично
                     sleep_duration = uniform(30, 60)
                     logger.info(f"[{self.session_name}] Сетевая ошибка: {type(network_error).__name__}. "
                                f"Повторная попытка через {int(sleep_duration)}с")
                     if settings.DEBUG_LOGGING:
                         logger.debug(f"[{self.session_name}] Детали сетевой ошибки: {network_error}")
                     await asyncio.sleep(sleep_duration)
+                except KeyboardInterrupt:
+                    logger.info(f"[{self.session_name}] Получен сигнал остановки")
+                    raise
                 except Exception as error:
-                    # Неизвестные ошибки - логируем как критические
                     sleep_duration = uniform(60, 120)
                     logger.error(f"[{self.session_name}] Неизвестная ошибка: {error}. "
                                 f"Засыпаем на {int(sleep_duration)}с")

@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     
     # Управление недействительными сессиями
     MOVE_INVALID_SESSIONS_TO_ERROR: bool = True
+    AUTO_BACKUP_SESSIONS: bool = True
+    AUTO_RESTORE_INVALID_SESSIONS: bool = True
     TOKEN_LIFETIME_HOURS: int = 6  # Время жизни токена в часах
 
     # Автоматизация Mutant Gifts
@@ -38,6 +40,10 @@ class Settings(BaseSettings):
     PROCESS_ACTIVITIES: bool = True
     CLAIM_DAILY_STREAK: bool = True
     MIN_COINS_BALANCE: int = 0
+    
+    # Настройки задержек между действиями
+    BATTLE_DELAY_MIN: int = 30
+    BATTLE_DELAY_MAX: int = 60
     
     # Настройки распыления карточек
     DISENCHANT_RARITIES: str = "Common"

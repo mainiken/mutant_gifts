@@ -18,7 +18,8 @@ from bot.utils import logger, config_utils, proxy_utils, CONFIG_PATH, SESSIONS_P
 from bot.core.tapper import run_tapper
 from bot.core.registrator import register_sessions
 from bot.utils.updater import UpdateManager
-from bot.exceptions import InvalidSession
+from bot.exceptions import InvalidSession, ServerUnavailableError
+from bot.utils.session_backup import SessionBackupManager
 
 from telethon.errors import (
     AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError,
@@ -267,6 +268,12 @@ async def run_tasks() -> None:
     await config_utils.restructure_config(CONFIG_PATH)
     await init_config_file()
     
+    if settings.AUTO_BACKUP_SESSIONS:
+        backup_manager = SessionBackupManager(SESSIONS_PATH)
+        backed_up = backup_manager.create_all_backups()
+        if backed_up > 0:
+            logger.info(f"✅ Создано {backed_up} бэкапов сессий")
+    
     base_tasks = []
     
     if settings.AUTO_UPDATE:
@@ -298,10 +305,31 @@ async def handle_tapper_session(tg_client: UniversalTelegramClient, stats_bot: O
     try:
         logger.info(f"{session_name} | Starting session")
         await run_tapper(tg_client=tg_client)
+    except ServerUnavailableError as e:
+        logger.warning(f"Сервер недоступен для сессии {session_name}: {e}")
+        if settings.AUTO_RESTORE_INVALID_SESSIONS:
+            backup_manager = SessionBackupManager(SESSIONS_PATH)
+            if backup_manager.backup_exists(session_name):
+                logger.info(f"🔄 Попытка восстановить сессию {session_name} из бэкапа...")
+                if backup_manager.restore_from_backup(session_name):
+                    logger.info(f"✅ Сессия {session_name} восстановлена, будет использована при следующем запуске")
+                else:
+                    logger.error(f"❌ Не удалось восстановить сессию {session_name}")
+            else:
+                logger.warning(f"⚠️ Бэкап для сессии {session_name} не найден")
     except InvalidSession as e:
         logger.error(f"Invalid session: {session_name}: {e}")
         if settings.DEBUG_LOGGING:
             logger.debug(f"[{session_name}] InvalidSession details: {e}")
+        
+        if settings.AUTO_RESTORE_INVALID_SESSIONS:
+            backup_manager = SessionBackupManager(SESSIONS_PATH)
+            if backup_manager.backup_exists(session_name):
+                logger.info(f"🔄 Попытка восстановить сессию {session_name} из бэкапа...")
+                if backup_manager.restore_from_backup(session_name):
+                    logger.info(f"✅ Сессия {session_name} восстановлена из бэкапа")
+                    return
+        
         await move_invalid_session_to_error_folder(session_name)
     except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError, 
             SessionPasswordNeededError) as e:
