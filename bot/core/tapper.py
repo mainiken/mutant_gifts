@@ -242,7 +242,7 @@ class BaseBot:
         
         if is_expired:
             logger.warning(f"[{self.session_name}] {self.EMOJI['time']} Токен истек: возраст {token_age:.0f}с > лимит {token_lifetime_seconds}с")
-        else:
+        elif settings.DEBUG_LOGGING:
             remaining_time = token_lifetime_seconds - token_age
             logger.debug(f"[{self.session_name}] {self.EMOJI['time']} Токен действителен: осталось {remaining_time:.0f}с")
         
@@ -899,7 +899,8 @@ class MutantGiftsBot(BaseBot):
             return False
         
         if current_gems < next_refill_cost:
-            logger.debug(f"{self.session_name} | 💵 Недостаточно гемов для восстановления {energy_type} энергии: {current_gems} < {next_refill_cost}")
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"{self.session_name} | 💵 Недостаточно гемов для восстановления {energy_type} энергии: {current_gems} < {next_refill_cost}")
             return False
         
         logger.info(f"{self.session_name} | 💰 Восстанавливаем {energy_type} энергию за {next_refill_cost} гемов (восстановление #{refills_made + 1})")
@@ -1289,7 +1290,8 @@ class MutantGiftsBot(BaseBot):
         max_consecutive_failures = 3
         consecutive_failures = 0
         
-        logger.debug(f"{self.session_name} | 🚀 Начинаем упрощенную прокачку (по 1 уровню). Монет: {current_coins}")
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"{self.session_name} | 🚀 Начинаем упрощенную прокачку (по 1 уровню). Монет: {current_coins}")
         
         # Логируем информацию о всех персонажах перед началом
         if settings.DEBUG_LOGGING and updated_characters:
