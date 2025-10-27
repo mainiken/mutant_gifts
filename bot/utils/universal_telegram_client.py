@@ -59,10 +59,9 @@ class UniversalTelegramClient:
             self.is_pyrogram = False
             self.session_name, _ = os.path.splitext(os.path.basename(self.client.session.filename))
         except (OperationalError, Exception) as e:
-            # Создаем копию параметров для Pyrogram, чтобы не модифицировать оригинал
             pyrogram_params = self._client_params.copy()
             session_name = pyrogram_params.pop('session')
-            pyrogram_params.pop('system_lang_code', None)  # Безопасное удаление
+            pyrogram_params.pop('system_lang_code', None)
             pyrogram_params['name'] = session_name
             
             self.client = PyrogramClient(**pyrogram_params)
@@ -71,6 +70,28 @@ class UniversalTelegramClient:
             
             self.is_pyrogram = True
             self.session_name, _ = os.path.splitext(os.path.basename(self.client.name))
+    
+    async def connect(self):
+        if not self.client.is_connected if not self.is_pyrogram else not self.client.is_connected:
+            await self.client.connect()
+    
+    async def disconnect(self):
+        if self.client.is_connected if not self.is_pyrogram else self.client.is_connected:
+            await self.client.disconnect()
+    
+    async def reinit_client(self):
+        try:
+            await self.disconnect()
+        except Exception as e:
+            logger.debug(f"{self.session_name} | Ошибка при отключении клиента: {e}")
+        
+        await asyncio.sleep(1)
+        self._webview_data = None
+        self._init_client()
+        
+        if self.proxy:
+            temp_proxy = self.proxy
+            self.set_proxy(temp_proxy)
 
     def set_proxy(self, proxy: Proxy):
         if not self.is_pyrogram:

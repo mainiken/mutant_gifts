@@ -170,6 +170,7 @@ async def get_tg_clients() -> list[UniversalTelegramClient]:
 
     if not session_paths:
         raise FileNotFoundError("Session files not found")
+    
     tg_clients = []
     for session in session_paths:
         session_name = os.path.basename(session)
@@ -211,16 +212,35 @@ async def get_tg_clients() -> list[UniversalTelegramClient]:
 
         session_proxy = session_config.get('proxy')
         if not session_proxy and 'proxy' in session_config.keys():
-            try:
-                tg_clients.append(UniversalTelegramClient(**client_params))
-                if accounts_config.get(session_name) != session_config:
-                    await config_utils.update_session_config_in_file(session_name, session_config, CONFIG_PATH)
-            except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError,
-                   SessionPasswordNeededError, PyrogramAuthKeyUnregisteredError,
-                    PyrogramSessionPasswordNeededError,
-                   PyrogramSessionRevoked, InvalidSession) as e:
-                logger.error(f"{session_name} | Session initialization error: {e}")
-                await move_invalid_session_to_error_folder(session_name)
+            max_init_attempts = 2 if settings.AUTO_RESTORE_INVALID_SESSIONS else 1
+            
+            for attempt in range(max_init_attempts):
+                try:
+                    tg_clients.append(UniversalTelegramClient(**client_params))
+                    if accounts_config.get(session_name) != session_config:
+                        await config_utils.update_session_config_in_file(session_name, session_config, CONFIG_PATH)
+                    break
+                except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError,
+                       SessionPasswordNeededError, PyrogramAuthKeyUnregisteredError,
+                        PyrogramSessionPasswordNeededError,
+                       PyrogramSessionRevoked, InvalidSession) as e:
+                    logger.error(f"{session_name} | Session initialization error: {e}")
+                    
+                    if attempt < max_init_attempts - 1 and settings.AUTO_RESTORE_INVALID_SESSIONS:
+                        backup_manager = SessionBackupManager(SESSIONS_PATH)
+                        if backup_manager.backup_exists(session_name):
+                            logger.info(f"🔄 {session_name} | Попытка восстановления из бэкапа...")
+                            if backup_manager.restore_from_backup(session_name):
+                                logger.info(f"✅ {session_name} | Сессия восстановлена, повторная инициализация...")
+                                await asyncio.sleep(1)
+                                continue
+                            else:
+                                logger.error(f"❌ {session_name} | Не удалось восстановить из бэкапа")
+                        else:
+                            logger.warning(f"⚠️ {session_name} | Бэкап не найден")
+                    
+                    await move_invalid_session_to_error_folder(session_name)
+                    break
             continue
 
         else:
@@ -234,17 +254,36 @@ async def get_tg_clients() -> list[UniversalTelegramClient]:
                 logger.warning(f"{session_name} | Didn't find a working unused proxy for session | Skipping")
                 continue
             else:
-                try:
-                    tg_clients.append(UniversalTelegramClient(**client_params))
-                    session_config['proxy'] = proxy
-                    if accounts_config.get(session_name) != session_config:
-                        await config_utils.update_session_config_in_file(session_name, session_config, CONFIG_PATH)
-                except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError,
-                      SessionPasswordNeededError, PyrogramAuthKeyUnregisteredError,
-                       PyrogramSessionPasswordNeededError,
-                      PyrogramSessionRevoked, InvalidSession) as e:
-                    logger.error(f"{session_name} | Session initialization error: {e}")
-                    await move_invalid_session_to_error_folder(session_name)
+                max_init_attempts = 2 if settings.AUTO_RESTORE_INVALID_SESSIONS else 1
+                
+                for attempt in range(max_init_attempts):
+                    try:
+                        tg_clients.append(UniversalTelegramClient(**client_params))
+                        session_config['proxy'] = proxy
+                        if accounts_config.get(session_name) != session_config:
+                            await config_utils.update_session_config_in_file(session_name, session_config, CONFIG_PATH)
+                        break
+                    except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError,
+                          SessionPasswordNeededError, PyrogramAuthKeyUnregisteredError,
+                           PyrogramSessionPasswordNeededError,
+                          PyrogramSessionRevoked, InvalidSession) as e:
+                        logger.error(f"{session_name} | Session initialization error: {e}")
+                        
+                        if attempt < max_init_attempts - 1 and settings.AUTO_RESTORE_INVALID_SESSIONS:
+                            backup_manager = SessionBackupManager(SESSIONS_PATH)
+                            if backup_manager.backup_exists(session_name):
+                                logger.info(f"🔄 {session_name} | Попытка восстановления из бэкапа...")
+                                if backup_manager.restore_from_backup(session_name):
+                                    logger.info(f"✅ {session_name} | Сессия восстановлена, повторная инициализация...")
+                                    await asyncio.sleep(1)
+                                    continue
+                                else:
+                                    logger.error(f"❌ {session_name} | Не удалось восстановить из бэкапа")
+                            else:
+                                logger.warning(f"⚠️ {session_name} | Бэкап не найден")
+                        
+                        await move_invalid_session_to_error_folder(session_name)
+                        break
 
     return tg_clients
 
@@ -302,50 +341,142 @@ async def run_tasks() -> None:
         
 async def handle_tapper_session(tg_client: UniversalTelegramClient, stats_bot: Optional[object] = None):
     session_name = tg_client.session_name
-    try:
-        logger.info(f"{session_name} | Starting session")
-        await run_tapper(tg_client=tg_client)
-    except ServerUnavailableError as e:
-        logger.warning(f"Сервер недоступен для сессии {session_name}: {e}")
-        if settings.AUTO_RESTORE_INVALID_SESSIONS:
-            backup_manager = SessionBackupManager(SESSIONS_PATH)
-            if backup_manager.backup_exists(session_name):
-                logger.info(f"🔄 Попытка восстановить сессию {session_name} из бэкапа...")
-                if backup_manager.restore_from_backup(session_name):
-                    logger.info(f"✅ Сессия {session_name} восстановлена, будет использована при следующем запуске")
-                else:
-                    logger.error(f"❌ Не удалось восстановить сессию {session_name}")
+    max_restore_attempts = 1
+    
+    for attempt in range(max_restore_attempts + 1):
+        try:
+            if attempt > 0:
+                logger.info(f"{session_name} | Попытка перезапуска после восстановления ({attempt}/{max_restore_attempts})")
+                await asyncio.sleep(uniform(2, 5))
             else:
-                logger.warning(f"⚠️ Бэкап для сессии {session_name} не найден")
-    except InvalidSession as e:
-        logger.error(f"Invalid session: {session_name}: {e}")
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{session_name}] InvalidSession details: {e}")
-        
-        if settings.AUTO_RESTORE_INVALID_SESSIONS:
-            backup_manager = SessionBackupManager(SESSIONS_PATH)
-            if backup_manager.backup_exists(session_name):
-                logger.info(f"🔄 Попытка восстановить сессию {session_name} из бэкапа...")
-                if backup_manager.restore_from_backup(session_name):
-                    logger.info(f"✅ Сессия {session_name} восстановлена из бэкапа")
-                    return
-        
-        await move_invalid_session_to_error_folder(session_name)
-    except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError, 
-            SessionPasswordNeededError) as e:
-        logger.error(f"Authentication error for Telethon session {session_name}: {e}")
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{session_name}] Telethon Auth error details: {e}")
-        await move_invalid_session_to_error_folder(session_name)
-    except (PyrogramAuthKeyUnregisteredError,
-            PyrogramSessionPasswordNeededError, PyrogramSessionRevoked) as e:
-        logger.error(f"Authentication error for Pyrogram session {session_name}: {e}")
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{session_name}] Pyrogram Auth error details: {e}")
-        await move_invalid_session_to_error_folder(session_name)
-    except Exception as e:
-        logger.error(f"Unexpected error in session {session_name}: {e}")
-        if settings.DEBUG_LOGGING:
-            logger.debug(f"[{session_name}] Unexpected exception details: {e}")
-    finally:
-        logger.info(f"{session_name} | Session ended")
+                logger.info(f"{session_name} | Starting session")
+            
+            await run_tapper(tg_client=tg_client)
+            break
+            
+        except ServerUnavailableError as e:
+            logger.warning(f"Сервер недоступен для сессии {session_name}: {e}")
+            if attempt < max_restore_attempts and settings.AUTO_RESTORE_INVALID_SESSIONS:
+                backup_manager = SessionBackupManager(SESSIONS_PATH)
+                if backup_manager.backup_exists(session_name):
+                    logger.info(f"🔄 Попытка восстановить сессию {session_name} из бэкапа...")
+                    if backup_manager.restore_from_backup(session_name):
+                        logger.info(f"✅ Сессия {session_name} восстановлена из бэкапа, повторный запуск...")
+                        continue
+                    else:
+                        logger.error(f"❌ Не удалось восстановить сессию {session_name}")
+                        break
+                else:
+                    logger.warning(f"⚠️ Бэкап для сессии {session_name} не найден")
+                    break
+            else:
+                break
+                
+        except InvalidSession as e:
+            logger.error(f"Invalid session: {session_name}: {e}")
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{session_name}] InvalidSession details: {e}")
+            
+            if attempt < max_restore_attempts and settings.AUTO_RESTORE_INVALID_SESSIONS:
+                backup_manager = SessionBackupManager(SESSIONS_PATH)
+                if backup_manager.backup_exists(session_name):
+                    logger.info(f"🔄 Попытка восстановить сессию {session_name} из бэкапа...")
+                    if backup_manager.restore_from_backup(session_name):
+                        logger.info(f"✅ Сессия {session_name} восстановлена из бэкапа, пересоздание клиента...")
+                        
+                        try:
+                            await tg_client.reinit_client()
+                            logger.info(f"✅ Клиент {session_name} успешно пересоздан, повторный запуск...")
+                            continue
+                        except Exception as reinit_error:
+                            logger.error(f"❌ Ошибка при пересоздании клиента {session_name}: {reinit_error}")
+                            try:
+                                await tg_client.disconnect()
+                            except:
+                                pass
+                            await move_invalid_session_to_error_folder(session_name)
+                            break
+                    else:
+                        logger.error(f"❌ Не удалось восстановить сессию {session_name}")
+                        try:
+                            await tg_client.disconnect()
+                        except:
+                            pass
+                        await move_invalid_session_to_error_folder(session_name)
+                        break
+                else:
+                    logger.warning(f"⚠️ Бэкап для сессии {session_name} не найден")
+                    try:
+                        await tg_client.disconnect()
+                    except:
+                        pass
+                    await move_invalid_session_to_error_folder(session_name)
+                    break
+            else:
+                try:
+                    await tg_client.disconnect()
+                except:
+                    pass
+                await move_invalid_session_to_error_folder(session_name)
+                break
+        except (AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyError, 
+                SessionPasswordNeededError) as e:
+            logger.error(f"Authentication error for Telethon session {session_name}: {e}")
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{session_name}] Telethon Auth error details: {e}")
+            
+            if attempt < max_restore_attempts and settings.AUTO_RESTORE_INVALID_SESSIONS:
+                backup_manager = SessionBackupManager(SESSIONS_PATH)
+                if backup_manager.backup_exists(session_name):
+                    logger.info(f"🔄 Попытка восстановить сессию {session_name} из бэкапа...")
+                    if backup_manager.restore_from_backup(session_name):
+                        logger.info(f"✅ Сессия {session_name} восстановлена из бэкапа, пересоздание клиента...")
+                        
+                        try:
+                            await tg_client.reinit_client()
+                            logger.info(f"✅ Клиент {session_name} успешно пересоздан, повторный запуск...")
+                            continue
+                        except Exception as reinit_error:
+                            logger.error(f"❌ Ошибка при пересоздании клиента {session_name}: {reinit_error}")
+            
+            try:
+                await tg_client.disconnect()
+            except:
+                pass
+            await move_invalid_session_to_error_folder(session_name)
+            break
+            
+        except (PyrogramAuthKeyUnregisteredError,
+                PyrogramSessionPasswordNeededError, PyrogramSessionRevoked) as e:
+            logger.error(f"Authentication error for Pyrogram session {session_name}: {e}")
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{session_name}] Pyrogram Auth error details: {e}")
+            
+            if attempt < max_restore_attempts and settings.AUTO_RESTORE_INVALID_SESSIONS:
+                backup_manager = SessionBackupManager(SESSIONS_PATH)
+                if backup_manager.backup_exists(session_name):
+                    logger.info(f"🔄 Попытка восстановить сессию {session_name} из бэкапа...")
+                    if backup_manager.restore_from_backup(session_name):
+                        logger.info(f"✅ Сессия {session_name} восстановлена из бэкапа, пересоздание клиента...")
+                        
+                        try:
+                            await tg_client.reinit_client()
+                            logger.info(f"✅ Клиент {session_name} успешно пересоздан, повторный запуск...")
+                            continue
+                        except Exception as reinit_error:
+                            logger.error(f"❌ Ошибка при пересоздании клиента {session_name}: {reinit_error}")
+            
+            try:
+                await tg_client.disconnect()
+            except:
+                pass
+            await move_invalid_session_to_error_folder(session_name)
+            break
+            
+        except Exception as e:
+            logger.error(f"Unexpected error in session {session_name}: {e}")
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{session_name}] Unexpected exception details: {e}")
+            break
+    
+    logger.info(f"{session_name} | Session ended")
