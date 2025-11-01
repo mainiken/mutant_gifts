@@ -641,49 +641,39 @@ class MutantGiftsBot(BaseBot):
             logger.debug(f"{self.session_name} | 🚫 Прокачка {character_id} до уровня {level} заблокирована на {self._upgrade_failure_timeout}с")
 
     def calculate_character_upgrade_cost(self, character: Dict) -> Optional[int]:
-        """Расчет стоимости прокачки персонажа по оригинальной формуле игры
-        
-        Формула из игры:
-        BASE_LEVEL_COST = 400
-        LEVEL_COST_MULTIPLIER = 1.25
-        getLevelCost(level) = round(400 * 1.25^(level - 2))
-        getTotalUpgradeCost(from, to) = sum(getLevelCost(i) for i in range(from+1, to+1))
-        
-        Args:
-            character: Данные персонажа с полем 'level'
-            
-        Returns:
-            Optional[int]: Стоимость прокачки на 1 уровень или None
-        """
+
         try:
-            current_level = character.get('level', 1)
+            current_level = character.get("level", 1)
             next_level = current_level + 1
-            
-            # Константы из оригинальной игры
-            BASE_LEVEL_COST = 400
+
+            # если позже выяснится, что у каких-то редкостей другая база —
+            # сюда можно добавить ветку по rarity
+            # rarity = (character.get("rarity") or "").lower()
+
+            # пока по твоим цифрам у legendary / epic / uncommon одна формула
+            BASE_LEVEL_COST = 5100
             LEVEL_COST_MULTIPLIER = 1.25
-            
-            # Стоимость одного уровня: round(400 * 1.25^(level - 2))
+
             def get_level_cost(level: int) -> int:
+                # cost to reach `level`
                 return round(BASE_LEVEL_COST * (LEVEL_COST_MULTIPLIER ** (level - 2)))
-            
-            # Суммарная стоимость от current_level до next_level
+
             total_cost = 0
             for level in range(current_level + 1, next_level + 1):
                 total_cost += get_level_cost(level)
-            
+
             if settings.DEBUG_LOGGING:
                 logger.debug(
                     f"{self.session_name} | Расчет стоимости для {character.get('name', 'Unknown')}: "
                     f"уровень {current_level} -> {next_level}, стоимость={total_cost}"
                 )
-            
+
             return total_cost
-            
+
         except Exception as error:
             logger.error(f"{self.session_name} | Ошибка расчета стоимости прокачки: {str(error)}")
             return None
-    
+
     def get_character_upgrade_cost(self, character: Dict) -> Optional[int]:
         """Получение реальной стоимости улучшения персонажа из данных API
         
